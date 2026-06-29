@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap');
+
 html,
 body,
 #game-root {
@@ -5,14 +7,18 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #0f172a;
+  background:
+    radial-gradient(circle at 15% 5%, #0e749055 0, transparent 28%),
+    radial-gradient(circle at 88% 8%, #f9731633 0, transparent 24%),
+    linear-gradient(135deg, #020617 0%, #07111f 45%, #111827 100%);
   font-family: Inter, Arial, sans-serif;
 }
 
 canvas {
   display: block;
   margin: auto;
-  box-shadow: 0 20px 80px #0008;
+  border-radius: 22px;
+  box-shadow: 0 24px 90px #000b, 0 0 0 1px #38bdf822;
 }
 
 .fatal-screen {
@@ -30,6 +36,7 @@ canvas {
   margin: 0;
   color: #facc15;
   font-size: clamp(36px, 8vw, 72px);
+  font-weight: 900;
 }
 
 .fatal-screen p {
