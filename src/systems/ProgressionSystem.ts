@@ -1,0 +1,2 @@
+import type { GameState } from '../types/game';
+export class ProgressionSystem{addXp(s:GameState,xp:number){s.xp+=xp; while(s.xp>=100+s.level*50){s.xp-=100+s.level*50;s.level++;s.money+=300+s.level*80;}} updateTasks(s:GameState){for(const t of s.tasks){if(t.id==='sell3')t.progress=s.stats.carsSold;if(t.id==='parts10')t.progress=s.stats.partsSold;if(t.id==='earn10k')t.progress=s.stats.totalEarned; if(!t.claimed&&t.progress>=t.target){t.claimed=true;s.money+=t.reward;}}}}

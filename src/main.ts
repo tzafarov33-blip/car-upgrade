@@ -1,0 +1,2 @@
+import Phaser from 'phaser';import { BootScene } from './scenes/BootScene';import { GameScene } from './scenes/GameScene';import './style.css';
+new Phaser.Game({type:Phaser.AUTO,parent:'game-root',width:1280,height:760,backgroundColor:'#111827',scene:[BootScene,GameScene],scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},render:{pixelArt:false,antialias:true},fps:{target:60,forceSetTimeOut:true},audio:{disableWebAudio:false}});

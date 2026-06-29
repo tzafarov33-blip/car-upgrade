@@ -1,0 +1,4 @@
+import Phaser from 'phaser';
+import type { GameState } from '../types/game';
+import { money } from '../utils/random';
+export class Hud{private texts:Phaser.GameObjects.Text[]=[]; private panel:Phaser.GameObjects.Rectangle; constructor(private scene:Phaser.Scene){this.panel=scene.add.rectangle(0,0,1280,86,0x111827,.88).setOrigin(0).setScrollFactor(0); for(let i=0;i<5;i++)this.texts.push(scene.add.text(18+i*235,14,'',{fontFamily:'Arial',fontSize:'20px',color:'#f8fafc'}).setScrollFactor(0));} update(s:GameState){this.texts[0].setText(`Money ${money(s.money)}`);this.texts[1].setText(`Level ${s.level}  XP ${Math.floor(s.xp)}`);this.texts[2].setText(`Workers ${s.workers.length}/${s.upgrades.workerCount}`);this.texts[3].setText(`Cars ${s.vehicles.length}/${6+s.upgrades.storage*2}`);this.texts[4].setText(`Day ${s.stats.day}`);}}

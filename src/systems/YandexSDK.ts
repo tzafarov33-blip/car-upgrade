@@ -1,0 +1,2 @@
+declare global{interface Window{YaGames?:{init:()=>Promise<any>}}}
+export class YandexSDK{private ysdk:any; async init(){if(window.YaGames) this.ysdk=await window.YaGames.init(); return this;} async showRewarded(reason:string,onReward:()=>void){try{await this.ysdk?.adv?.showRewardedVideo?.({callbacks:{onRewarded:onReward}})??onReward()}catch{onReward()} console.info('rewarded',reason)} async showInterstitial(){try{await this.ysdk?.adv?.showFullscreenAdv?.({})}catch{}} async save(data:unknown){try{const p=await this.ysdk?.getPlayer?.(); await p?.setData?.(data)}catch{}}}
