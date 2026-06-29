@@ -28,12 +28,28 @@ export class AssetSystem {
     g.generateTexture('rust_patch', 40, 20);
     g.clear();
     Object.entries(rarityColor).forEach(([rarity, color]) => {
-      g.fillStyle(color, 1).fillStar(18, 18, 5, 7, 16);
+      this.drawStar(g, 18, 18, 5, 7, 16, color);
       g.lineStyle(2, 0xffffff, 0.85).strokeCircle(18, 18, 17);
       g.generateTexture(`rarity_${rarity as Rarity}`, 36, 36);
       g.clear();
     });
     g.destroy();
+  }
+
+  private drawStar(graphics: Phaser.GameObjects.Graphics, x: number, y: number, points: number, innerRadius: number, outerRadius: number, color: number): void {
+    const step = Math.PI / points;
+    graphics.fillStyle(color, 1);
+    graphics.beginPath();
+    for (let i = 0; i < points * 2; i++) {
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      const angle = -Math.PI / 2 + i * step;
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      if (i === 0) graphics.moveTo(px, py);
+      else graphics.lineTo(px, py);
+    }
+    graphics.closePath();
+    graphics.fillPath();
   }
 
   private createEnvironmentTextures(): void {
