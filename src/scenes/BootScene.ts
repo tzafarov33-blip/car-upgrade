@@ -16,7 +16,7 @@ export class BootScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor(0x07111f);
     this.add.circle(250, 130, 260, 0x0ea5e9, 0.1);
     this.add.circle(1060, 130, 260, 0xf97316, 0.08);
-    this.add(this.roundedPanel(640, 380, 620, 280, 30, 0x0f172a, 0.78, 0x38bdf8, 0.25));
+    this.add.existing(this.roundedPanel(640, 380, 620, 280, 30, 0x0f172a, 0.78, 0x38bdf8, 0.25));
     this.add.text(640, 315, 'JUNKYARD EMPIRE', {
       fontFamily: FONT,
       fontSize: '50px',
@@ -29,7 +29,7 @@ export class BootScene extends Phaser.Scene {
       color: '#bae6fd',
       fontStyle: '700'
     }).setOrigin(0.5);
-    this.add(this.roundedPanel(640, 425, 430, 10, 5, 0x1e293b, 0.9, 0x38bdf8, 0.1));
+    this.add.existing(this.roundedPanel(640, 425, 430, 10, 5, 0x1e293b, 0.9, 0x38bdf8, 0.1));
     this.progressFill = this.add.graphics();
     this.progressText = this.add.text(640, 462, 'Loading optimized art assets... 0%', {
       fontFamily: FONT,
@@ -42,9 +42,6 @@ export class BootScene extends Phaser.Scene {
     this.load.on('progress', (value: number) => {
       this.drawProgress(value);
       this.progressText?.setText(`Loading optimized art assets... ${Math.round(value * 100)}%`);
-    });
-    this.load.on('loaderror', (file: { key?: string; src?: string }) => {
-      console.warn(`[BootScene] Asset failed to load: ${file.key ?? 'unknown'} ${file.src ?? ''}`);
     });
   }
 
@@ -76,7 +73,7 @@ export class BootScene extends Phaser.Scene {
 
   private showBootError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.add(this.roundedPanel(640, 560, 820, 130, 24, 0x111827, 0.92, 0xef4444, 0.75));
+    this.add.existing(this.roundedPanel(640, 560, 820, 130, 24, 0x111827, 0.92, 0xef4444, 0.75));
     this.add.text(640, 530, 'The game could not finish loading.', {
       fontFamily: FONT,
       fontSize: '24px',
