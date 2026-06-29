@@ -59,9 +59,12 @@ export class MainMenuScene extends Phaser.Scene {
   private drawBackdrop(): void {
     this.add.circle(160, 115, 270, 0x0ea5e9, 0.09);
     this.add.circle(1110, 95, 245, 0xf97316, 0.08);
+    this.add.image(640, 560, 'workshop').setScale(1.1);
     this.add.image(170, 590, 'scrap_pile').setScale(1.6);
     this.add.image(1110, 590, 'container').setScale(1.25);
     this.add.image(1030, 470, 'forklift').setScale(1.25);
+    this.add.image(350, 610, 'tow_truck').setScale(1.0);
+    this.add.image(905, 625, 'worker').setScale(0.86);
     this.add.image(265, 482, 'tire_stack').setScale(1.2);
     this.add.ellipse(640, 675, 1120, 90, 0x020617, 0.35);
     for (let i = 0; i < 4; i++) {
