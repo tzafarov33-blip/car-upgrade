@@ -6,8 +6,6 @@ import { RNG, money } from '../utils/random';
 import type { Rarity, VehicleClass } from '../types/game';
 
 type ContainerPhase = 'waiting' | 'delivering' | 'opening' | 'revealed' | 'cleaning' | 'repairing' | 'painting' | 'ready';
-type ActionKey = 'buy' | 'garage' | 'sell' | 'upgrade' | 'inventory' | 'settings' | 'free' | 'clean' | 'repair' | 'paint';
-
 interface ImportVehicle {
   id: string;
   name: string;
@@ -39,7 +37,6 @@ interface ImportState {
 }
 
 interface NavAction {
-  key: ActionKey;
   icon: string;
   title: string;
   tint: number;
@@ -70,11 +67,10 @@ export class GameScene extends Phaser.Scene {
   private stageLayer!: Phaser.GameObjects.Container;
   private hudLayer!: Phaser.GameObjects.Container;
   private navLayer!: Phaser.GameObjects.Container;
-  private overlayLayer!: Phaser.GameObjects.Container;
   private toastPool: any[] = [];
   private coinPool: any[] = [];
   private autosaveTimer = 0;
-  private layout = { width: 1280, height: 760, safeBottom: 92 };
+  private layout = { width: 1280, height: 760 };
 
   constructor() { super('Game'); }
 
@@ -87,7 +83,6 @@ export class GameScene extends Phaser.Scene {
     this.stageLayer = this.add.container(0, 0).setDepth(10);
     this.hudLayer = this.add.container(0, 0).setDepth(30);
     this.navLayer = this.add.container(0, 0).setDepth(40);
-    this.overlayLayer = this.add.container(0, 0).setDepth(60);
     this.createPools();
     (this as any).sys.scale.on('resize', this.refreshLayout, this);
     this.refreshLayout();
@@ -106,7 +101,7 @@ export class GameScene extends Phaser.Scene {
     }
     for (let i = 0; i < 4; i++) {
       const toast = this.add.container(-1000, -1000).setVisible(false).setDepth(80);
-      toast.add(this.add.rectangle(0, 0, 520, 46, 0x0f172a, 0.9).setStrokeStyle(1, 0x38bdf8, 0.45));
+      toast.add(this.roundedPanel(0, 0, 520, 46, 16, 0x0f172a, 0.9, 0x38bdf8, 0.45));
       toast.add(this.add.text(0, 0, '', { fontFamily: 'Inter, Arial', fontSize: '17px', color: '#fef3c7', fontStyle: '700' }).setOrigin(0.5));
       this.toastPool.push(toast);
     }
@@ -164,11 +159,18 @@ export class GameScene extends Phaser.Scene {
     this.drawContainerStage();
     this.drawContextActions();
     this.drawBottomNavigation();
+    this.animateLayer(this.stageLayer, 10);
+    this.animateLayer(this.navLayer, 0);
+  }
+
+  private animateLayer(layer: Phaser.GameObjects.Container, yOffset: number): void {
+    (layer as any).setAlpha(0.001).setY(yOffset);
+    this.tweens.add({ targets: layer, alpha: 1, y: 0, duration: 180, ease: 'Sine.Out' });
   }
 
   private clearLayer(layer?: Phaser.GameObjects.Container): void {
     if (!layer) return;
-    const children = [...(layer as any).list] as Phaser.GameObjects.GameObject[];
+    const children = [...(layer as Phaser.GameObjects.Container & { list: Phaser.GameObjects.GameObject[] }).list];
     children.forEach((child) => child.destroy());
   }
 
@@ -176,7 +178,7 @@ export class GameScene extends Phaser.Scene {
     const w = Math.min(1160, this.layout.width - 44);
     const x = this.layout.width / 2;
     const y = 18;
-    const panel = this.glassPanel(x, y, w, 112, 18, 0x0b1626, 0.78, 0x38bdf8, 0.32).setOrigin(0.5, 0);
+    const panel = this.glassPanel(x, y + 56, w, 112, 18, 0x0b1626, 0.78, 0x38bdf8, 0.32);
     this.hudLayer.add(panel);
     const objective = this.currentObjective();
     const xpNeeded = this.state.level * 100;
@@ -202,7 +204,7 @@ export class GameScene extends Phaser.Scene {
   private drawContainerStage(): void {
     const cx = this.layout.width / 2;
     const stageY = Math.max(215, this.layout.height * 0.47);
-    this.stageLayer.add(this.glassPanel(cx, stageY + 42, Math.min(760, this.layout.width - 80), 276, 28, 0x111827, 0.42, 0x64748b, 0.22).setOrigin(0.5));
+    this.stageLayer.add(this.glassPanel(cx, stageY + 42, Math.min(760, this.layout.width - 80), 276, 28, 0x111827, 0.42, 0x64748b, 0.22));
     if (this.state.phase === 'waiting') {
       this.stageLayer.add(this.add.image(cx, stageY, 'container_closed').setScale(1.02));
       this.stageCopy('Sealed import container', 'Buy a container, claim a sponsored one, or upgrade your contacts.', '#e0f2fe');
@@ -247,26 +249,28 @@ export class GameScene extends Phaser.Scene {
   private drawContextActions(): void {
     const y = this.layout.height - 154;
     if (this.state.phase === 'waiting') {
-      this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🎁', 'Free', () => this.freeContainer(), true, 0x22c55e, 156));
+      this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🎁', 'Free', () => this.freeContainer(), true, 0x22c55e, Math.min(156, this.layout.width - 48)));
     }
     if (this.state.current && this.state.phase !== 'ready') {
       const cx = this.layout.width / 2;
-      this.navLayer.add(this.actionButton(cx - 170, y, '🧽', 'Clean', () => this.restore('clean'), this.state.current.clean < 1, 0x38bdf8, 146));
-      this.navLayer.add(this.actionButton(cx, y, '🔧', 'Repair', () => this.restore('repair'), this.state.current.repair < 1, 0xf97316, 146));
-      this.navLayer.add(this.actionButton(cx + 170, y, '🎨', 'Paint', () => this.restore('paint'), this.state.current.paint < 1, 0xa855f7, 146));
+      const spacing = Math.min(170, Math.max(112, this.layout.width / 4.1));
+      const buttonWidth = Math.min(146, Math.max(96, spacing - 18));
+      this.navLayer.add(this.actionButton(cx - spacing, y, '🧽', 'Clean', () => this.restore('clean'), this.state.current.clean < 1, 0x38bdf8, buttonWidth));
+      this.navLayer.add(this.actionButton(cx, y, '🔧', 'Repair', () => this.restore('repair'), this.state.current.repair < 1, 0xf97316, buttonWidth));
+      this.navLayer.add(this.actionButton(cx + spacing, y, '🎨', 'Paint', () => this.restore('paint'), this.state.current.paint < 1, 0xa855f7, buttonWidth));
     }
   }
 
   private drawBottomNavigation(): void {
     const actions: NavAction[] = [
-      { key: 'buy', icon: '🚚', title: 'Buy', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
-      { key: 'garage', icon: '🏪', title: 'Garage', tint: 0x38bdf8, action: () => this.toast('Garage shows the current mystery vehicle and restoration steps.'), enabled: () => Boolean(this.state.current) },
-      { key: 'sell', icon: '💰', title: 'Sell', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => Boolean(this.state.current) },
-      { key: 'upgrade', icon: '🔧', title: 'Upgrade', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
-      { key: 'inventory', icon: '📦', title: 'Stock', tint: 0x93c5fd, action: () => this.toast(this.state.current ? 'One vehicle is occupying your import bay.' : 'Import bay is empty.'), enabled: () => true },
-      { key: 'settings', icon: '⚙', title: 'Save', tint: 0xa3a3a3, action: () => this.saveState(), enabled: () => true }
+      { icon: '🚚', title: 'Buy', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
+      { icon: '🏪', title: 'Garage', tint: 0x38bdf8, action: () => this.toast('Garage shows the current mystery vehicle and restoration steps.'), enabled: () => Boolean(this.state.current) },
+      { icon: '💰', title: 'Sell', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => Boolean(this.state.current) },
+      { icon: '🔧', title: 'Upgrade', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
+      { icon: '📦', title: 'Stock', tint: 0x93c5fd, action: () => this.toast(this.state.current ? 'One vehicle is occupying your import bay.' : 'Import bay is empty.'), enabled: () => true },
+      { icon: '⚙', title: 'Save', tint: 0xa3a3a3, action: () => this.saveState(), enabled: () => true }
     ];
-    const barW = Math.min(980, this.layout.width - 36);
+    const barW = Math.max(340, Math.min(980, this.layout.width - 36));
     const y = this.layout.height - 76;
     this.navLayer.add(this.glassPanel(this.layout.width / 2, y, barW, 88, 26, 0x07111f, 0.88, 0x38bdf8, 0.26));
     const gap = barW / actions.length;
@@ -296,8 +300,28 @@ export class GameScene extends Phaser.Scene {
     return c;
   }
 
-  private glassPanel(x: number, y: number, width: number, height: number, radius: number, fill: number, alpha: number, stroke: number, strokeAlpha: number): Phaser.GameObjects.Rectangle {
-    return this.add.rectangle(x, y, width, height, fill, alpha).setStrokeStyle(1.5, stroke, strokeAlpha).setOrigin(0.5);
+  private glassPanel(x: number, y: number, width: number, height: number, radius: number, fill: number, alpha: number, stroke: number, strokeAlpha: number): Phaser.GameObjects.Container {
+    const c = this.add.container(x, y);
+    c.add(this.add.graphics()
+      .fillStyle(0x020617, 0.22)
+      .fillRoundedRect(-width / 2 + 4, -height / 2 + 8, width, height, radius));
+    c.add(this.add.graphics()
+      .fillStyle(fill, alpha)
+      .fillRoundedRect(-width / 2, -height / 2, width, height, radius)
+      .lineStyle(1.5, stroke, strokeAlpha)
+      .strokeRoundedRect(-width / 2, -height / 2, width, height, radius));
+    c.add(this.add.graphics()
+      .fillStyle(0xffffff, 0.045)
+      .fillRoundedRect(-width / 2 + 10, -height / 2 + 8, width - 20, Math.max(8, height * 0.18), Math.max(6, radius - 6)));
+    return c;
+  }
+
+  private roundedPanel(x: number, y: number, width: number, height: number, radius: number, fill: number, alpha: number, stroke: number, strokeAlpha: number): Phaser.GameObjects.Graphics {
+    return this.add.graphics({ x, y })
+      .fillStyle(fill, alpha)
+      .fillRoundedRect(-width / 2, -height / 2, width, height, radius)
+      .lineStyle(1.5, stroke, strokeAlpha)
+      .strokeRoundedRect(-width / 2, -height / 2, width, height, radius);
   }
 
   private currentObjective(): string {

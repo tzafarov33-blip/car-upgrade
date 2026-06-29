@@ -10,7 +10,7 @@ export class MainMenuScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.setBackgroundColor(0x07111f);
     this.drawBackdrop();
-    this.add.rectangle(640, 286, 720, 250, 0x0f172a, 0.64).setStrokeStyle(2, 0x38bdf8, 0.22);
+    this.add(this.roundedPanel(640, 286, 720, 250, 34, 0x0f172a, 0.64, 0x38bdf8, 0.22));
     this.add.text(640, 188, 'JUNKYARD EMPIRE', {
       fontFamily: FONT,
       fontSize: '62px',
@@ -25,8 +25,9 @@ export class MainMenuScene extends Phaser.Scene {
       wordWrap: { width: 740 }
     }).setOrigin(0.5);
     const start = this.add.container(640, 430);
-    const panel = this.add.rectangle(0, 0, 330, 72, 0xf97316, 0.92).setStrokeStyle(2, 0xfacc15, 0.4);
-    const glow = this.add.rectangle(0, 0, 312, 56, 0xfacc15, 0).setBlendMode('ADD');
+    const panel = this.roundedPanel(0, 0, 330, 72, 24, 0xf97316, 0.92, 0xfacc15, 0.4);
+    const glow = this.roundedPanel(0, 0, 312, 56, 22, 0xfacc15, 0, 0xfacc15, 0);
+    (glow as any).setBlendMode('ADD');
     const label = this.add.text(0, 0, '🏁  START RESTORING', {
       fontFamily: FONT,
       fontSize: '22px',
@@ -34,8 +35,8 @@ export class MainMenuScene extends Phaser.Scene {
       fontStyle: '900'
     }).setOrigin(0.5);
     start.add([panel, glow, label]).setSize(330, 72).setInteractive({ useHandCursor: true })
-      .on('pointerover', () => { glow.setAlpha(0.22); this.tweens.add({ targets: start, scale: 1.045, duration: 130, ease: 'Back.Out' }); })
-      .on('pointerout', () => { glow.setAlpha(0); this.tweens.add({ targets: start, scale: 1, duration: 130 }); })
+      .on('pointerover', () => { (glow as any).setAlpha(0.22); this.tweens.add({ targets: start, scale: 1.045, duration: 130, ease: 'Back.Out' }); })
+      .on('pointerout', () => { (glow as any).setAlpha(0); this.tweens.add({ targets: start, scale: 1, duration: 130 }); })
       .on('pointerdown', () => this.tweens.add({ targets: start, scale: 0.96, yoyo: true, duration: 90, onComplete: () => this.scene.start('Game') }));
     this.add.text(640, 525, 'Autosave • Offline income • Reward containers • Mobile-ready layout', {
       fontFamily: FONT,
@@ -43,6 +44,16 @@ export class MainMenuScene extends Phaser.Scene {
       color: '#bae6fd',
       fontStyle: '700'
     }).setOrigin(0.5);
+  }
+
+  private roundedPanel(x: number, y: number, width: number, height: number, radius: number, fill: number, alpha: number, stroke: number, strokeAlpha: number): Phaser.GameObjects.Graphics {
+    return this.add.graphics({ x, y })
+      .fillStyle(0x020617, 0.24)
+      .fillRoundedRect(-width / 2 + 4, -height / 2 + 8, width, height, radius)
+      .fillStyle(fill, alpha)
+      .fillRoundedRect(-width / 2, -height / 2, width, height, radius)
+      .lineStyle(1.5, stroke, strokeAlpha)
+      .strokeRoundedRect(-width / 2, -height / 2, width, height, radius);
   }
 
   private drawBackdrop(): void {
