@@ -14,6 +14,13 @@ Files:
 - `public/assets/junkyard/scrap_pile.svg`
 - `public/assets/junkyard/tire_stack.svg`
 - `public/assets/junkyard/container.svg`
+- `public/assets/junkyard/container_closed.svg`
+- `public/assets/junkyard/container_open.svg`
+- `public/assets/junkyard/dumpster.svg`
+- `public/assets/ui/coin.svg`
+- `public/assets/ui/icon_clean.svg`
+- `public/assets/ui/icon_repair.svg`
+- `public/assets/ui/icon_paint.svg`
 - `public/assets/junkyard/tree.svg`
 - `public/assets/junkyard/oil_puddle.svg`
 - `public/assets/junkyard/forklift.svg`

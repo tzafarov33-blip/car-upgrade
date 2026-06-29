@@ -17,10 +17,17 @@ export const assetManifest: AssetDefinition[] = [
   { key: 'scrap_pile', path: 'assets/junkyard/scrap_pile.svg', width: 208, height: 164 },
   { key: 'tire_stack', path: 'assets/junkyard/tire_stack.svg', width: 128, height: 144 },
   { key: 'container', path: 'assets/junkyard/container.svg', width: 280, height: 148 },
+  { key: 'container_closed', path: 'assets/junkyard/container_closed.svg', width: 360, height: 220 },
+  { key: 'container_open', path: 'assets/junkyard/container_open.svg', width: 420, height: 240 },
+  { key: 'dumpster', path: 'assets/junkyard/dumpster.svg', width: 180, height: 130 },
   { key: 'tree', path: 'assets/junkyard/tree.svg', width: 128, height: 168 },
   { key: 'oil_puddle', path: 'assets/junkyard/oil_puddle.svg', width: 140, height: 64 },
   { key: 'forklift', path: 'assets/junkyard/forklift.svg', width: 224, height: 136 },
   { key: 'panel_glow', path: 'assets/ui/panel_glow.svg', width: 500, height: 172 },
+  { key: 'coin', path: 'assets/ui/coin.svg', width: 64, height: 64 },
+  { key: 'icon_clean', path: 'assets/ui/icon_clean.svg', width: 96, height: 96 },
+  { key: 'icon_repair', path: 'assets/ui/icon_repair.svg', width: 96, height: 96 },
+  { key: 'icon_paint', path: 'assets/ui/icon_paint.svg', width: 96, height: 96 },
   ...rarityKeys.map((rarity) => ({ key: `rarity_${rarity}`, path: `assets/ui/rarity_${rarity}.svg`, width: 72, height: 72 }))
 ];
 
