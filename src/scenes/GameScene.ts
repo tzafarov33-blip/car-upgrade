@@ -5,7 +5,7 @@ import { ParticlePool } from '../systems/ParticlePool';
 import { RNG, money } from '../utils/random';
 import type { Rarity, VehicleClass } from '../types/game';
 
-type ContainerPhase = 'waiting' | 'delivering' | 'opening' | 'revealed' | 'cleaning' | 'repairing' | 'painting' | 'ready';
+type ContainerPhase = 'waiting' | 'delivering' | 'opening' | 'revealed' | 'trashing' | 'cleaning' | 'repairing' | 'painting' | 'ready';
 type MissionCadence = 'daily' | 'weekly' | 'achievement';
 interface ImportVehicle {
   id: string;
@@ -18,6 +18,7 @@ interface ImportVehicle {
   dirt: number;
   damage: number;
   color: number;
+  trash: number;
   clean: number;
   repair: number;
   paint: number;
@@ -64,6 +65,8 @@ interface ImportState {
   vehiclesSold: number;
   vehiclesRestored: number;
   eventName?: string;
+  tutorialComplete: boolean;
+  tutorialStep: number;
 }
 
 interface NavAction {
@@ -122,6 +125,7 @@ const achievementTemplates = [
   ['ach_legend', 'Restore a legendary vehicle', 1, 12000]
 ] as const;
 const eventNames = ['Rainy Port Discounts', 'TV Auction Weekend', 'Collector Convention', 'Midnight Container Rumors'];
+const tutorialSteps = ['Remove trash', 'Wash the car', 'Repair damage', 'Sell the flip'] as const;
 
 export class GameScene extends Phaser.Scene {
   private state!: ImportState;
@@ -143,7 +147,7 @@ export class GameScene extends Phaser.Scene {
   private stageBusy = false;
   private autosaveTimer = 0;
   private hasRendered = false;
-  private ambientTimer?: Phaser.Time.TimerEvent;
+  private ambientTimer?: any;
   private layout = { width: 1280, height: 760 };
 
   constructor() { super('Game'); }
@@ -161,11 +165,14 @@ export class GameScene extends Phaser.Scene {
     this.rewardLayer = this.add.container(0, 0).setDepth(85);
     this.createPools();
     (this as any).sys.scale.on('resize', this.refreshLayout, this);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.shutdown, this);
+    (this as any).sys.events.once('shutdown', this.shutdown, this);
     this.refreshLayout();
     this.input.keyboard?.on('keydown-S', () => this.saveState());
     this.input.once('pointerdown', () => { this.audio.startAmbience(); this.audio.setMusicIntensity(this.state.level); });
     this.ambientTimer = this.time.delayedCall(700, () => this.spawnAmbientAction());
+    if (!this.state.tutorialComplete && this.state.phase === 'waiting' && !this.state.current) {
+      this.time.delayedCall(450, () => this.startTutorialCinematic());
+    }
   }
 
   private shutdown(): void {
@@ -195,7 +202,7 @@ export class GameScene extends Phaser.Scene {
 
   private newState(): ImportState {
     const now = Date.now();
-    return this.normalizeState({ money: 450, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now } as ImportState);
+    return this.normalizeState({ money: 0, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
   }
 
   private loadState(): ImportState {
@@ -237,6 +244,9 @@ export class GameScene extends Phaser.Scene {
     state.vehiclesSold ??= 0;
     state.vehiclesRestored ??= 0;
     state.eventName ??= eventNames[Math.floor(now / 86_400_000) % eventNames.length];
+    state.tutorialComplete ??= state.containersOpened > 0 || state.vehiclesSold > 0;
+    state.tutorialStep ??= state.tutorialComplete ? tutorialSteps.length : 0;
+    if (state.current) state.current.trash ??= 0;
     return state;
   }
 
@@ -361,6 +371,7 @@ export class GameScene extends Phaser.Scene {
     this.drawContainerStage();
     this.drawContextActions();
     this.drawBottomNavigation();
+    if (!this.state.tutorialComplete) this.drawTutorialOverlay();
     if (!this.hasRendered) {
       this.animateLayer(this.stageLayer, 10);
       this.animateLayer(this.navLayer, 0);
@@ -398,7 +409,7 @@ export class GameScene extends Phaser.Scene {
       ['⭐', 'Level', `${this.state.level}`, '#93c5fd'],
       ['🎯', 'Objective', objective, '#e2e8f0'],
       ['📦', 'Storage', this.state.current ? '1 / 1' : '0 / 1', '#86efac'],
-      ['🚚', 'Container', money(this.state.containerPrice), '#fb923c']
+      ['🚚', 'Container', this.state.tutorialComplete ? money(this.state.containerPrice) : 'Unlocks after tutorial', '#fb923c']
     ];
     const gap = w / items.length;
     items.forEach(([icon, label, value, color], index) => {
@@ -464,15 +475,22 @@ export class GameScene extends Phaser.Scene {
     const vehicleBody = this.add.image(cx, stageY + 35, 'vehicle_body').setScale(1.12).setTint(vehicle.color);
     this.stageLayer.add(vehicleBody);
     this.tweens.add({ targets: vehicleBody, y: vehicleBody.y - 3, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-    for (let i = 0; i < Math.ceil(vehicle.dirt * 5 * (1 - vehicle.clean)); i++) this.stageLayer.add(this.add.image(cx - 80 + i * 38, stageY + 25 + (i % 2) * 18, 'dirt_cluster').setScale(0.7));
+    for (let i = 0; i < Math.ceil(vehicle.dirt * 5 * (1 - vehicle.trash) * (1 - vehicle.clean * 0.45)); i++) this.stageLayer.add(this.add.image(cx - 80 + i * 38, stageY + 25 + (i % 2) * 18, 'dirt_cluster').setScale(0.7));
     for (let i = 0; i < Math.ceil(vehicle.damage * 4 * (1 - vehicle.repair)); i++) this.stageLayer.add(this.add.image(cx - 55 + i * 48, stageY + 60, 'rust_patch').setScale(0.76));
     this.stageLayer.add(this.add.image(cx - 145, stageY - 88, `rarity_${vehicle.rarity}`).setScale(0.72));
     const vehicleTitle = this.add.text(cx, stageY + 158, `${vehicle.name}  •  ${vehicle.rarity.toUpperCase()}  •  ${money(vehicle.value)}`, { fontFamily: 'Inter, Arial', fontSize: '23px', color: rarityText[vehicle.rarity], fontStyle: '800' }).setOrigin(0.5);
     this.stageLayer.add(vehicleTitle);
     this.tweens.add({ targets: vehicleTitle, scale: 1.03, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-    this.stageLayer.add(this.progressPill(cx - 220, stageY + 207, 'Clean', vehicle.clean, 'icon_clean'));
-    this.stageLayer.add(this.progressPill(cx, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
-    this.stageLayer.add(this.progressPill(cx + 220, stageY + 207, 'Paint', vehicle.paint, 'icon_paint'));
+    if (this.state.tutorialComplete) {
+      this.stageLayer.add(this.progressPill(cx - 220, stageY + 207, 'Clean', vehicle.clean, 'icon_clean'));
+      this.stageLayer.add(this.progressPill(cx, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
+      this.stageLayer.add(this.progressPill(cx + 220, stageY + 207, 'Paint', vehicle.paint, 'icon_paint'));
+    } else {
+      this.stageLayer.add(this.progressPill(cx - 255, stageY + 207, 'Trash', vehicle.trash, 'dirt_cluster'));
+      this.stageLayer.add(this.progressPill(cx - 85, stageY + 207, 'Wash', vehicle.clean, 'icon_clean'));
+      this.stageLayer.add(this.progressPill(cx + 85, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
+      this.stageLayer.add(this.progressPill(cx + 255, stageY + 207, 'Sell', this.state.phase === 'ready' ? 1 : 0, 'coin'));
+    }
   }
 
   private stageCopy(title: string, body: string, color: string): void {
@@ -499,10 +517,22 @@ export class GameScene extends Phaser.Scene {
 
   private drawContextActions(): void {
     const y = this.layout.height - 154;
-    if (this.state.phase === 'waiting') {
+    if (this.state.phase === 'waiting' && this.state.tutorialComplete) {
       this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🎁', 'Free', () => this.freeContainer(), true, 0x22c55e, Math.min(156, this.layout.width - 48)));
     }
-    if (this.state.current && ['revealed', 'cleaning', 'repairing', 'painting'].includes(this.state.phase)) {
+    if (this.state.current && !this.state.tutorialComplete && ['revealed', 'trashing', 'cleaning', 'repairing'].includes(this.state.phase)) {
+      const actions = [
+        () => this.restore('trash'),
+        () => this.restore('clean'),
+        () => this.restore('repair')
+      ];
+      const icons = ['🧹', '🧽', '🔧'];
+      const colors = [0xfacc15, 0x38bdf8, 0xf97316];
+      const labels = ['Trash', 'Wash', 'Repair'];
+      const step = Math.min(this.state.tutorialStep, 2);
+      this.navLayer.add(this.actionButton(this.layout.width / 2, y, icons[step], labels[step], actions[step], !this.stageBusy, colors[step], Math.min(176, this.layout.width - 48)));
+    }
+    if (this.state.current && this.state.tutorialComplete && ['revealed', 'cleaning', 'repairing', 'painting'].includes(this.state.phase)) {
       const cx = this.layout.width / 2;
       const spacing = Math.min(170, Math.max(112, this.layout.width / 4.1));
       const buttonWidth = Math.min(146, Math.max(96, spacing - 18));
@@ -514,7 +544,7 @@ export class GameScene extends Phaser.Scene {
 
   private drawBottomNavigation(): void {
     const actions: NavAction[] = [
-      { icon: '🚚', title: 'Buy', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
+      { icon: '🚚', title: this.state.tutorialComplete ? 'Buy' : 'Locked', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.tutorialComplete && this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
       { icon: '🏪', title: 'Goals', tint: 0x38bdf8, action: () => this.toast(`Next unlock: ${featureUnlocks.find((u) => u.level > this.state.level)?.name ?? 'Empire complete'}`), enabled: () => true },
       { icon: '💰', title: 'Sell', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => this.state.phase === 'ready' },
       { icon: '🔧', title: 'Upgrade', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
@@ -578,6 +608,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private currentObjective(): string {
+    if (!this.state.tutorialComplete) return tutorialSteps[Math.min(this.state.tutorialStep, tutorialSteps.length - 1)];
     const mission = this.state.dailyMissions?.find((item) => !item.claimed);
     if (mission) return mission.title;
     if (this.state.phase === 'waiting') return 'Buy next container';
@@ -587,6 +618,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private buyContainer(free = false): void {
+    if (!this.state.tutorialComplete) return this.toast('Finish the first flip to unlock container buying.');
     if (this.stageBusy) return this.toast('Crew is already working on this container.');
     if (this.state.phase !== 'waiting') return this.toast('Finish the current container first.');
     if (!free && this.state.money < this.state.containerPrice) return this.toast(`Need ${money(this.state.containerPrice)} to buy this container.`);
@@ -629,25 +661,27 @@ export class GameScene extends Phaser.Scene {
     this.yandex.showRewarded('free-container', () => this.buyContainer(true));
   }
 
-  private restore(step: 'clean' | 'repair' | 'paint'): void {
+  private restore(step: 'trash' | 'clean' | 'repair' | 'paint'): void {
     if (this.stageBusy) return this.toast('Crew is finishing the current job.');
     const vehicle = this.state.current;
     if (!vehicle) return;
     this.stageBusy = true;
     const before = vehicle[step];
-    vehicle[step] = Math.min(1, vehicle[step] + 0.34 + this.state.reputation * 0.02);
-    const complete = vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1;
-    this.state.phase = complete ? 'ready' : step === 'clean' ? 'cleaning' : step === 'repair' ? 'repairing' : 'painting';
+    const stepAmount = this.state.tutorialComplete ? 0.34 + this.state.reputation * 0.02 : 1;
+    vehicle[step] = Math.min(1, vehicle[step] + stepAmount);
+    const complete = vehicle.trash >= 1 && vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1;
+    this.state.phase = complete ? 'ready' : step === 'trash' ? 'trashing' : step === 'clean' ? 'cleaning' : step === 'repair' ? 'repairing' : 'painting';
     if (complete) {
       this.state.vehiclesRestored += 1;
       this.claimReadyMissions();
     }
-    this.audio.play(step === 'clean' ? 'dust' : step === 'paint' ? 'reward' : 'tool');
+    this.audio.play(step === 'trash' || step === 'clean' ? 'dust' : step === 'paint' ? 'reward' : 'tool');
     this.render();
     this.playWorkAnimation(step, vehicle[step] - before);
     this.time.delayedCall(1100, () => { this.stageBusy = false; });
+    if (!this.state.tutorialComplete) this.rewardTutorialStep(step);
     if (complete) {
-      this.toast('Restoration complete. Customers are making offers!');
+      this.toast(this.state.tutorialComplete ? 'Restoration complete. Customers are making offers!' : 'Great work. Now sell the restored car!');
       this.showRewardWindow('RESTORATION COMPLETE', `${vehicle.name} is ready for buyers`, vehicle.rarity);
       this.audio.play('upgrade');
     }
@@ -668,6 +702,13 @@ export class GameScene extends Phaser.Scene {
     if (vip) this.state.vipCustomers += 1;
     if (collector) this.state.collectors += 1;
     if (vehicle.rarity === 'legendary') { const ach = this.state.achievements.find((m) => m.id === 'ach_legend'); if (ach) ach.progress = 1; }
+    if (!this.state.tutorialComplete) {
+      this.state.tutorialComplete = true;
+      this.state.tutorialStep = tutorialSteps.length;
+      this.state.money += 350;
+      this.state.xp += 35;
+      this.toast('Tutorial complete! Container purchasing unlocked.');
+    }
     this.state.xp += Math.floor(25 + offer / 120);
     while (this.state.xp >= this.state.level * 100) {
       this.state.xp -= this.state.level * 100;
@@ -713,7 +754,7 @@ export class GameScene extends Phaser.Scene {
     return {
       id: this.createId(), name: this.rng.pick(vehicleNames[vehicleClass]), class: vehicleClass, rarity,
       value: Math.floor(base * (1 + this.state.level * 0.18) * (0.75 + condition)), buyPrice: this.state.containerPrice, condition,
-      dirt: 0.45 + this.rng.next() * 0.5, damage: 0.35 + this.rng.next() * 0.55, color: this.rng.pick(paintColors), clean: 0, repair: 0, paint: 0
+      dirt: 0.45 + this.rng.next() * 0.5, damage: 0.35 + this.rng.next() * 0.55, color: this.rng.pick(paintColors), trash: 0, clean: 0, repair: 0, paint: 0
     };
   }
 
@@ -722,20 +763,33 @@ export class GameScene extends Phaser.Scene {
   }
 
 
+  private startTutorialCinematic(): void {
+    if (this.state.tutorialComplete || this.state.current || this.stageBusy) return;
+    this.state.current = this.rollVehicle(3);
+    this.state.current.paint = 1;
+    this.state.phase = 'delivering';
+    this.stageBusy = true;
+    this.render();
+    this.playDeliveryCinematic(() => this.openContainer());
+    this.toast('A tow truck just found your first flip!');
+  }
+
   private playDeliveryCinematic(onComplete: () => void): void {
     const cx = this.layout.width / 2;
     const y = Math.max(215, this.layout.height * 0.47);
     this.cameras.main.pan(cx, y, 650, 'Sine.easeInOut');
     this.cameras.main.zoomTo(1.045, 650, 'Sine.easeInOut');
+    const truck = this.add.image(-220, y + 120, 'tow_truck').setScale(0.82).setDepth(56);
     const forklift = this.add.image(-160, y + 98, 'forklift').setScale(0.92).setDepth(58);
     const container = this.add.image(-30, y + 10, 'container_closed').setScale(0.92).setDepth(57);
     const worker = this.add.image(-70, y + 128, 'worker').setScale(0.58).setDepth(59);
-    this.cinematicLayer.add([forklift, container, worker]);
+    this.cinematicLayer.add([truck, forklift, container, worker]);
     this.activeVehicle = container;
+    this.tweens.add({ targets: truck, x: cx - 360, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: forklift, x: cx - 210, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: container, x: cx - 36, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: worker, x: cx + 210, duration: 1250, ease: 'Sine.InOut' });
-    this.tweens.add({ targets: [container, forklift], y: '+=7', duration: 105, yoyo: true, repeat: 12, ease: 'Sine.InOut' });
+    this.tweens.add({ targets: [container, forklift, truck], y: '+=7', duration: 105, yoyo: true, repeat: 12, ease: 'Sine.InOut' });
     this.time.delayedCall(350, () => this.emitDust(cx - 250, y + 100, 18));
     this.time.delayedCall(1050, () => this.emitDust(cx - 70, y + 108, 24));
     this.time.delayedCall(1450, () => {
@@ -750,6 +804,11 @@ export class GameScene extends Phaser.Scene {
     this.audio.play('door');
     this.cameras.main.pan(cx, y - 15, 900, 'Sine.easeInOut');
     this.cameras.main.zoomTo(1.06, 900, 'Sine.easeInOut');
+    const worker = this.add.image(cx - 230, y + 112, 'worker').setScale(0.62).setDepth(63);
+    this.cinematicLayer.add(worker);
+    this.tweens.add({ targets: worker, x: cx - 118, duration: 520, ease: 'Sine.Out' });
+    this.tweens.add({ targets: worker, y: worker.y - 10, duration: 160, yoyo: true, repeat: 5, delay: 420 });
+    this.tweens.add({ targets: worker, x: cx + 210, alpha: 0, duration: 540, delay: 1650, ease: 'Sine.In', onComplete: () => worker.destroy() });
     for (let i = 0; i < 5; i++) this.time.delayedCall(i * 260, () => this.emitSmoke(cx - 130 + i * 60, y - 20 + (i % 2) * 24));
     for (let i = 0; i < 4; i++) this.time.delayedCall(280 + i * 260, () => this.emitDust(cx - 150 + i * 95, y + 88, 18));
     const reveal = this.add.image(cx, y + 35, 'vehicle_body').setScale(0.15).setAlpha(0).setTint(this.state.current?.color ?? 0xffffff).setDepth(62);
@@ -759,12 +818,12 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(1900, () => this.cameras.main.zoomTo(1, 500, 'Sine.easeInOut'));
   }
 
-  private playWorkAnimation(step: 'clean' | 'repair' | 'paint', delta: number): void {
+  private playWorkAnimation(step: 'trash' | 'clean' | 'repair' | 'paint', delta: number): void {
     const cx = this.layout.width / 2;
     const y = this.layout.height * 0.55;
-    const color = step === 'paint' ? this.state.current?.color ?? 0xa855f7 : step === 'clean' ? 0x38bdf8 : 0xfacc15;
+    const color = step === 'paint' ? this.state.current?.color ?? 0xa855f7 : step === 'clean' ? 0x38bdf8 : step === 'trash' ? 0xfacc15 : 0xf97316;
     this.particles.burst(cx, y, color, 22 + Math.ceil(delta * 20));
-    this.emitDust(cx - 80, y + 40, step === 'clean' ? 24 : 12);
+    this.emitDust(cx - 80, y + 40, step === 'trash' ? 30 : step === 'clean' ? 24 : 12);
     const worker = this.add.image(cx - 260, y + 78, 'worker').setScale(0.55).setDepth(60);
     this.cinematicLayer.add(worker);
     this.tweens.add({ targets: worker, x: cx - 80, duration: 360, ease: 'Sine.Out' });
@@ -801,6 +860,28 @@ export class GameScene extends Phaser.Scene {
     this.rewardLayer.add(card);
     this.tweens.add({ targets: card, y, alpha: 1, scale: 1, duration: 360, ease: 'Back.Out' });
     this.tweens.add({ targets: card, y: y - 28, alpha: 0, scale: 0.9, duration: 420, delay: 1800, ease: 'Sine.In', onComplete: () => card.destroy() });
+  }
+
+  private rewardTutorialStep(step: 'trash' | 'clean' | 'repair' | 'paint'): void {
+    const order: Array<'trash' | 'clean' | 'repair'> = ['trash', 'clean', 'repair'];
+    const expected = order[this.state.tutorialStep];
+    if (step !== expected) return;
+    const reward = 120 + this.state.tutorialStep * 80;
+    this.state.money += reward;
+    this.state.xp += 20;
+    this.flyCoins(reward);
+    this.showRewardWindow('STEP COMPLETE', `${tutorialSteps[this.state.tutorialStep]} • +${money(reward)} • +20 XP`, 'uncommon');
+    this.state.tutorialStep += 1;
+    this.time.delayedCall(850, () => this.render());
+  }
+
+  private drawTutorialOverlay(): void {
+    const x = Math.min(this.layout.width - 185, Math.max(185, this.layout.width / 2));
+    const y = 156;
+    this.navLayer.add(this.glassPanel(x, y, 360, 104, 22, 0x020617, 0.86, 0xfacc15, 0.5));
+    this.navLayer.add(this.add.text(x, y - 34, 'FIRST FLIP', { fontFamily: 'Inter, Arial', fontSize: '18px', color: '#facc15', fontStyle: '900' }).setOrigin(0.5));
+    const labels = tutorialSteps.map((label, index) => `${index === this.state.tutorialStep ? '👉' : index < this.state.tutorialStep ? '✅' : '⬇'} ${index + 1}. ${label}`);
+    this.navLayer.add(this.add.text(x, y + 15, labels.join('   '), { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#f8fafc', fontStyle: '800', align: 'center', wordWrap: { width: 320 } }).setOrigin(0.5));
   }
 
   private cameraPulse(): void {

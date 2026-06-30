@@ -58,7 +58,7 @@ export class AssetSystem {
   }
 
   private createFallbackTexture(asset: AssetDefinition): void {
-    const graphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    const graphics = this.scene.add.graphics().setVisible(false);
     const width = Math.max(16, asset.width);
     const height = Math.max(16, asset.height);
     graphics.fillStyle(0x1e293b, 1).fillRoundedRect(0, 0, width, height, Math.min(18, width / 8, height / 8));
