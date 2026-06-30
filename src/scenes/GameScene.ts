@@ -142,6 +142,8 @@ export class GameScene extends Phaser.Scene {
   private activeVehicle?: any;
   private stageBusy = false;
   private autosaveTimer = 0;
+  private hasRendered = false;
+  private ambientTimer?: Phaser.Time.TimerEvent;
   private layout = { width: 1280, height: 760 };
 
   constructor() { super('Game'); }
@@ -159,10 +161,18 @@ export class GameScene extends Phaser.Scene {
     this.rewardLayer = this.add.container(0, 0).setDepth(85);
     this.createPools();
     (this as any).sys.scale.on('resize', this.refreshLayout, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.shutdown, this);
     this.refreshLayout();
     this.input.keyboard?.on('keydown-S', () => this.saveState());
     this.input.once('pointerdown', () => { this.audio.startAmbience(); this.audio.setMusicIntensity(this.state.level); });
-    this.time.delayedCall(700, () => this.spawnAmbientAction());
+    this.ambientTimer = this.time.delayedCall(700, () => this.spawnAmbientAction());
+  }
+
+  private shutdown(): void {
+    (this as any).sys.scale.off('resize', this.refreshLayout, this);
+    this.ambientTimer?.remove(false);
+    this.tweens.killAll();
+    this.audio.destroy();
   }
 
   private refreshLayout(): void {
@@ -288,9 +298,17 @@ export class GameScene extends Phaser.Scene {
 
   private saveState(): void {
     this.state.lastSave = Date.now();
-    localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+    this.safeLocalSave();
     void this.yandex.save(this.state);
     this.toast('Business saved.');
+  }
+
+  private safeLocalSave(): void {
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+    } catch (error) {
+      console.warn('[GameScene] Local save unavailable; continuing without crashing.', error);
+    }
   }
 
   private drawWorld(): void {
@@ -343,9 +361,12 @@ export class GameScene extends Phaser.Scene {
     this.drawContainerStage();
     this.drawContextActions();
     this.drawBottomNavigation();
-    this.animateLayer(this.stageLayer, 10);
-    this.animateLayer(this.navLayer, 0);
-    this.animateLayer(this.hudLayer, -12);
+    if (!this.hasRendered) {
+      this.animateLayer(this.stageLayer, 10);
+      this.animateLayer(this.navLayer, 0);
+      this.animateLayer(this.hudLayer, -12);
+      this.hasRendered = true;
+    }
   }
 
   private animateLayer(layer: Phaser.GameObjects.Container, yOffset: number): void {
@@ -355,6 +376,7 @@ export class GameScene extends Phaser.Scene {
 
   private clearLayer(layer?: Phaser.GameObjects.Container): void {
     if (!layer) return;
+    this.tweens.killTweensOf(layer);
     const children = [...(layer as Phaser.GameObjects.Container & { list: Phaser.GameObjects.GameObject[] }).list];
     children.forEach((child) => {
       this.tweens.killTweensOf(child);
@@ -565,6 +587,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private buyContainer(free = false): void {
+    if (this.stageBusy) return this.toast('Crew is already working on this container.');
     if (this.state.phase !== 'waiting') return this.toast('Finish the current container first.');
     if (!free && this.state.money < this.state.containerPrice) return this.toast(`Need ${money(this.state.containerPrice)} to buy this container.`);
     if (!free) this.state.money -= this.state.containerPrice;
@@ -607,8 +630,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private restore(step: 'clean' | 'repair' | 'paint'): void {
+    if (this.stageBusy) return this.toast('Crew is finishing the current job.');
     const vehicle = this.state.current;
     if (!vehicle) return;
+    this.stageBusy = true;
     const before = vehicle[step];
     vehicle[step] = Math.min(1, vehicle[step] + 0.34 + this.state.reputation * 0.02);
     const complete = vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1;
@@ -620,6 +645,7 @@ export class GameScene extends Phaser.Scene {
     this.audio.play(step === 'clean' ? 'dust' : step === 'paint' ? 'reward' : 'tool');
     this.render();
     this.playWorkAnimation(step, vehicle[step] - before);
+    this.time.delayedCall(1100, () => { this.stageBusy = false; });
     if (complete) {
       this.toast('Restoration complete. Customers are making offers!');
       this.showRewardWindow('RESTORATION COMPLETE', `${vehicle.name} is ready for buyers`, vehicle.rarity);
@@ -685,10 +711,14 @@ export class GameScene extends Phaser.Scene {
     const base = { common: 1300, uncommon: 2100, rare: 4200, epic: 9000, legendary: 24000 }[rarity];
     const condition = 0.22 + this.rng.next() * 0.38;
     return {
-      id: crypto.randomUUID(), name: this.rng.pick(vehicleNames[vehicleClass]), class: vehicleClass, rarity,
+      id: this.createId(), name: this.rng.pick(vehicleNames[vehicleClass]), class: vehicleClass, rarity,
       value: Math.floor(base * (1 + this.state.level * 0.18) * (0.75 + condition)), buyPrice: this.state.containerPrice, condition,
       dirt: 0.45 + this.rng.next() * 0.5, damage: 0.35 + this.rng.next() * 0.55, color: this.rng.pick(paintColors), clean: 0, repair: 0, paint: 0
     };
+  }
+
+  private createId(): string {
+    return globalThis.crypto?.randomUUID?.() ?? `vehicle-${Date.now().toString(36)}-${Math.floor(this.rng.next() * 1_000_000).toString(36)}`;
   }
 
 
@@ -781,7 +811,7 @@ export class GameScene extends Phaser.Scene {
 
   private spawnAmbientAction(): void {
     if (!this.scene.isActive('Game') || this.stageBusy) {
-      this.time.delayedCall(1200, () => this.spawnAmbientAction());
+      this.ambientTimer = this.time.delayedCall(1200, () => this.spawnAmbientAction());
       return;
     }
     const y = 610 + Phaser.Math.Between(-18, 28);
@@ -796,7 +826,7 @@ export class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: worker, x: fromLeft ? this.layout.width + 80 : -80, duration: 6200, ease: 'Sine.InOut', onComplete: () => { this.activeWorkers = this.activeWorkers.filter((item) => item !== worker); worker.destroy(); } });
       this.tweens.add({ targets: worker, y: worker.y - 7, duration: 240, yoyo: true, repeat: 24, ease: 'Sine.InOut' });
     }
-    this.time.delayedCall(2400 + Phaser.Math.Between(0, 2800), () => this.spawnAmbientAction());
+    this.ambientTimer = this.time.delayedCall(2400 + Phaser.Math.Between(0, 2800), () => this.spawnAmbientAction());
   }
 
   private flyCoins(amount: number): void {
@@ -827,7 +857,7 @@ export class GameScene extends Phaser.Scene {
     if (this.autosaveTimer >= 20) {
       this.autosaveTimer = 0;
       this.state.lastSave = Date.now();
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+      this.safeLocalSave();
     }
   }
 }
