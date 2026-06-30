@@ -1,4 +1,4 @@
-export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
 export type VehicleClass = 'compact' | 'sedan' | 'muscle' | 'offroad' | 'sports' | 'super';
 export type Station = 'auction' | 'delivery' | 'inspection' | 'repair' | 'paint' | 'crusher' | 'parking' | 'sold';
 export type WorkerSpecialization = 'mechanic' | 'painter' | 'dismantler' | 'driver';

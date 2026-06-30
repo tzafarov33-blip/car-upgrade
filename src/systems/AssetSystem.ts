@@ -42,6 +42,9 @@ export class AssetSystem {
   constructor(private scene: Phaser.Scene) {}
 
   preload(): void {
+    this.scene.load.on('loaderror', (file: { key?: string; src?: string }) => {
+      console.warn(`[AssetSystem] Asset failed to load, fallback will be used: ${file.key ?? file.src ?? 'unknown'}`);
+    });
     for (const asset of assetManifest) {
       if (this.scene.textures.exists(asset.key)) continue;
       this.scene.load.svg(asset.key, asset.path, { width: asset.width, height: asset.height });
@@ -49,9 +52,20 @@ export class AssetSystem {
   }
 
   validate(): void {
-    const missing = assetManifest.filter((asset) => !this.scene.textures.exists(asset.key));
-    if (missing.length > 0) {
-      throw new Error(`Missing required game assets: ${missing.map((asset) => asset.key).join(', ')}`);
+    for (const asset of assetManifest) {
+      if (!this.scene.textures.exists(asset.key)) this.createFallbackTexture(asset);
     }
+  }
+
+  private createFallbackTexture(asset: AssetDefinition): void {
+    const graphics = this.scene.add.graphics().setVisible(false);
+    const width = Math.max(16, asset.width);
+    const height = Math.max(16, asset.height);
+    graphics.fillStyle(0x1e293b, 1).fillRoundedRect(0, 0, width, height, Math.min(18, width / 8, height / 8));
+    graphics.lineStyle(Math.max(2, Math.floor(Math.min(width, height) / 24)), 0xfacc15, 0.9).strokeRoundedRect(2, 2, width - 4, height - 4, Math.min(16, width / 8, height / 8));
+    graphics.lineStyle(2, 0xef4444, 0.75).lineBetween(8, 8, width - 8, height - 8).lineBetween(width - 8, 8, 8, height - 8);
+    graphics.generateTexture(asset.key, width, height);
+    graphics.destroy();
+    console.warn(`[AssetSystem] Created fallback texture for missing asset "${asset.key}".`);
   }
 }

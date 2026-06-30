@@ -95,6 +95,15 @@ export class AudioSystem {
     if (muted) this.stopLoops();
   }
 
+  destroy(): void {
+    this.stopLoops();
+    this.context?.close().catch(() => {
+      // Browser may reject close() for already-closing contexts; ignore during scene shutdown.
+    });
+    this.context = undefined;
+    this.enabled = false;
+  }
+
   private loopOscillator(type: OscillatorType, frequency: number, volume: number): OscillatorNode | undefined {
     const ctx = this.context;
     if (!ctx || !this.ambientGain) return undefined;

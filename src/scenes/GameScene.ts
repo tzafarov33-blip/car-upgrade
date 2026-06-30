@@ -5,8 +5,9 @@ import { ParticlePool } from '../systems/ParticlePool';
 import { RNG, money } from '../utils/random';
 import type { Rarity, VehicleClass } from '../types/game';
 
-type ContainerPhase = 'waiting' | 'delivering' | 'opening' | 'revealed' | 'cleaning' | 'repairing' | 'painting' | 'ready';
+type ContainerPhase = 'waiting' | 'delivering' | 'delivered' | 'opening' | 'revealed' | 'trashing' | 'cleaning' | 'repairing' | 'painting' | 'ready';
 type MissionCadence = 'daily' | 'weekly' | 'achievement';
+type SpecialContainer = 'golden' | 'collector' | 'military' | 'classic';
 interface ImportVehicle {
   id: string;
   name: string;
@@ -18,9 +19,16 @@ interface ImportVehicle {
   dirt: number;
   damage: number;
   color: number;
+  trash: number;
   clean: number;
   repair: number;
   paint: number;
+  conditionTags: string[];
+  specialContainer?: SpecialContainer;
+  repairCostEstimate: number;
+  instantSaleOffer: number;
+  scrapValue: number;
+  potentialSale: number;
 }
 
 interface Mission {
@@ -63,7 +71,10 @@ interface ImportState {
   secretContainers: number;
   vehiclesSold: number;
   vehiclesRestored: number;
+  storedVehicles: number;
   eventName?: string;
+  tutorialComplete: boolean;
+  tutorialStep: number;
 }
 
 interface NavAction {
@@ -83,9 +94,11 @@ const vehicleNames: Record<VehicleClass, string[]> = {
   sports: ['Sprint Veloce', 'Aero Pulse', 'Night GT'],
   super: ['Aurora X', 'Zenith R', 'Phantom Twelve']
 };
-const rarityDeck: Rarity[] = ['common', 'common', 'common', 'uncommon', 'uncommon', 'rare', 'epic', 'legendary'];
+const rarityDeck: Rarity[] = ['common', 'common', 'common', 'uncommon', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
 const paintColors = [0xef4444, 0x3b82f6, 0x22c55e, 0xf59e0b, 0xa855f7, 0xf8fafc, 0x0f172a, 0x14b8a6];
-const rarityText: Record<Rarity, string> = { common: '#cbd5e1', uncommon: '#34d399', rare: '#60a5fa', epic: '#c084fc', legendary: '#facc15' };
+const rarityText: Record<Rarity, string> = { common: '#cbd5e1', uncommon: '#34d399', rare: '#60a5fa', epic: '#c084fc', legendary: '#facc15', mythic: '#ff3df2' };
+const rarityTint: Record<Rarity, number> = { common: 0xcbd5e1, uncommon: 0x34d399, rare: 0x60a5fa, epic: 0xc084fc, legendary: 0xfacc15, mythic: 0xff3df2 };
+const specialContainerNames: Record<SpecialContainer, string> = { golden: 'Golden Container', collector: 'Collector Container', military: 'Mysterious Military Container', classic: 'Forgotten Classic Collection' };
 
 const locationUnlocks = [
   { level: 1, name: 'Abandoned Junkyard' },
@@ -122,6 +135,7 @@ const achievementTemplates = [
   ['ach_legend', 'Restore a legendary vehicle', 1, 12000]
 ] as const;
 const eventNames = ['Rainy Port Discounts', 'TV Auction Weekend', 'Collector Convention', 'Midnight Container Rumors'];
+const tutorialSteps = ['Remove trash', 'Wash the car', 'Repair damage', 'Sell the flip'] as const;
 
 export class GameScene extends Phaser.Scene {
   private state!: ImportState;
@@ -142,6 +156,8 @@ export class GameScene extends Phaser.Scene {
   private activeVehicle?: any;
   private stageBusy = false;
   private autosaveTimer = 0;
+  private hasRendered = false;
+  private ambientTimer?: any;
   private layout = { width: 1280, height: 760 };
 
   constructor() { super('Game'); }
@@ -159,10 +175,21 @@ export class GameScene extends Phaser.Scene {
     this.rewardLayer = this.add.container(0, 0).setDepth(85);
     this.createPools();
     (this as any).sys.scale.on('resize', this.refreshLayout, this);
+    (this as any).sys.events.once('shutdown', this.shutdown, this);
     this.refreshLayout();
     this.input.keyboard?.on('keydown-S', () => this.saveState());
     this.input.once('pointerdown', () => { this.audio.startAmbience(); this.audio.setMusicIntensity(this.state.level); });
-    this.time.delayedCall(700, () => this.spawnAmbientAction());
+    this.ambientTimer = this.time.delayedCall(700, () => this.spawnAmbientAction());
+    if (!this.state.tutorialComplete && this.state.phase === 'waiting' && !this.state.current) {
+      this.time.delayedCall(450, () => this.startTutorialCinematic());
+    }
+  }
+
+  private shutdown(): void {
+    (this as any).sys.scale.off('resize', this.refreshLayout, this);
+    this.ambientTimer?.remove(false);
+    this.tweens.killAll();
+    this.audio.destroy();
   }
 
   private refreshLayout(): void {
@@ -185,7 +212,7 @@ export class GameScene extends Phaser.Scene {
 
   private newState(): ImportState {
     const now = Date.now();
-    return this.normalizeState({ money: 450, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now } as ImportState);
+    return this.normalizeState({ money: 0, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, storedVehicles: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
   }
 
   private loadState(): ImportState {
@@ -226,8 +253,21 @@ export class GameScene extends Phaser.Scene {
     state.secretContainers ??= 0;
     state.vehiclesSold ??= 0;
     state.vehiclesRestored ??= 0;
+    state.storedVehicles ??= 0;
     state.eventName ??= eventNames[Math.floor(now / 86_400_000) % eventNames.length];
+    state.tutorialComplete ??= state.containersOpened > 0 || state.vehiclesSold > 0;
+    state.tutorialStep ??= state.tutorialComplete ? tutorialSteps.length : 0;
+    if (state.current) this.normalizeVehicle(state.current);
     return state;
+  }
+
+  private normalizeVehicle(vehicle: ImportVehicle): void {
+    vehicle.trash ??= 0;
+    vehicle.conditionTags ??= this.conditionTags(vehicle);
+    vehicle.repairCostEstimate ??= this.estimateRepairCost(vehicle);
+    vehicle.potentialSale ??= this.estimatePotentialSale(vehicle);
+    vehicle.instantSaleOffer ??= this.estimateInstantSale(vehicle);
+    vehicle.scrapValue ??= this.estimateScrapValue(vehicle);
   }
 
   private createMissions(cadence: MissionCadence): Mission[] {
@@ -288,9 +328,17 @@ export class GameScene extends Phaser.Scene {
 
   private saveState(): void {
     this.state.lastSave = Date.now();
-    localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+    this.safeLocalSave();
     void this.yandex.save(this.state);
     this.toast('Business saved.');
+  }
+
+  private safeLocalSave(): void {
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+    } catch (error) {
+      console.warn('[GameScene] Local save unavailable; continuing without crashing.', error);
+    }
   }
 
   private drawWorld(): void {
@@ -343,9 +391,13 @@ export class GameScene extends Phaser.Scene {
     this.drawContainerStage();
     this.drawContextActions();
     this.drawBottomNavigation();
-    this.animateLayer(this.stageLayer, 10);
-    this.animateLayer(this.navLayer, 0);
-    this.animateLayer(this.hudLayer, -12);
+    if (!this.state.tutorialComplete) this.drawTutorialOverlay();
+    if (!this.hasRendered) {
+      this.animateLayer(this.stageLayer, 10);
+      this.animateLayer(this.navLayer, 0);
+      this.animateLayer(this.hudLayer, -12);
+      this.hasRendered = true;
+    }
   }
 
   private animateLayer(layer: Phaser.GameObjects.Container, yOffset: number): void {
@@ -355,6 +407,7 @@ export class GameScene extends Phaser.Scene {
 
   private clearLayer(layer?: Phaser.GameObjects.Container): void {
     if (!layer) return;
+    this.tweens.killTweensOf(layer);
     const children = [...(layer as Phaser.GameObjects.Container & { list: Phaser.GameObjects.GameObject[] }).list];
     children.forEach((child) => {
       this.tweens.killTweensOf(child);
@@ -376,7 +429,7 @@ export class GameScene extends Phaser.Scene {
       ['⭐', 'Level', `${this.state.level}`, '#93c5fd'],
       ['🎯', 'Objective', objective, '#e2e8f0'],
       ['📦', 'Storage', this.state.current ? '1 / 1' : '0 / 1', '#86efac'],
-      ['🚚', 'Container', money(this.state.containerPrice), '#fb923c']
+      ['🚚', 'Container', this.state.tutorialComplete ? money(this.state.containerPrice) : 'Unlocks after tutorial', '#fb923c']
     ];
     const gap = w / items.length;
     items.forEach(([icon, label, value, color], index) => {
@@ -429,11 +482,11 @@ export class GameScene extends Phaser.Scene {
       this.stageCopy('Sealed import container', 'Buy a container, claim a sponsored one, or upgrade your contacts.', '#e0f2fe');
       return;
     }
-    if (this.state.phase === 'delivering' || this.state.phase === 'opening') {
+    if (this.state.phase === 'delivering' || this.state.phase === 'delivered' || this.state.phase === 'opening') {
       const container = this.add.image(cx, stageY, this.state.phase === 'opening' ? 'container_open' : 'container_closed').setScale(1.05);
       this.stageLayer.add(container);
-      this.tweens.add({ targets: container, x: cx + 8, duration: 90, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-      this.stageCopy(this.state.phase === 'opening' ? 'Doors opening slowly...' : 'Forklift unloading...', this.state.phase === 'opening' ? 'Smoke curls out. Dust flies. Something valuable is inside.' : 'The crew guides the container into the bay.', '#fde68a');
+      if (this.state.phase === 'delivering' || this.state.phase === 'opening') this.tweens.add({ targets: container, x: cx + 8, duration: 90, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
+      this.stageCopy(this.state.phase === 'opening' ? 'Doors unlocking...' : this.state.phase === 'delivered' ? 'Container secured' : 'Forklift unloading...', this.state.phase === 'opening' ? 'Metal groans. Dust leaks from the seal. Watch for the silhouette.' : this.state.phase === 'delivered' ? 'Press OPEN CONTAINER when you are ready for the reveal.' : 'The crew guides the container into the bay.', '#fde68a');
       return;
     }
     const vehicle = this.state.current;
@@ -442,15 +495,24 @@ export class GameScene extends Phaser.Scene {
     const vehicleBody = this.add.image(cx, stageY + 35, 'vehicle_body').setScale(1.12).setTint(vehicle.color);
     this.stageLayer.add(vehicleBody);
     this.tweens.add({ targets: vehicleBody, y: vehicleBody.y - 3, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-    for (let i = 0; i < Math.ceil(vehicle.dirt * 5 * (1 - vehicle.clean)); i++) this.stageLayer.add(this.add.image(cx - 80 + i * 38, stageY + 25 + (i % 2) * 18, 'dirt_cluster').setScale(0.7));
+    const visibleDirt = this.state.tutorialComplete ? vehicle.dirt * (1 - vehicle.clean) : vehicle.dirt * (1 - vehicle.trash) * (1 - vehicle.clean * 0.45);
+    for (let i = 0; i < Math.ceil(visibleDirt * 5); i++) this.stageLayer.add(this.add.image(cx - 80 + i * 38, stageY + 25 + (i % 2) * 18, 'dirt_cluster').setScale(0.7));
     for (let i = 0; i < Math.ceil(vehicle.damage * 4 * (1 - vehicle.repair)); i++) this.stageLayer.add(this.add.image(cx - 55 + i * 48, stageY + 60, 'rust_patch').setScale(0.76));
     this.stageLayer.add(this.add.image(cx - 145, stageY - 88, `rarity_${vehicle.rarity}`).setScale(0.72));
+    this.drawContainerInfo(cx, stageY, vehicle);
     const vehicleTitle = this.add.text(cx, stageY + 158, `${vehicle.name}  •  ${vehicle.rarity.toUpperCase()}  •  ${money(vehicle.value)}`, { fontFamily: 'Inter, Arial', fontSize: '23px', color: rarityText[vehicle.rarity], fontStyle: '800' }).setOrigin(0.5);
     this.stageLayer.add(vehicleTitle);
     this.tweens.add({ targets: vehicleTitle, scale: 1.03, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-    this.stageLayer.add(this.progressPill(cx - 220, stageY + 207, 'Clean', vehicle.clean, 'icon_clean'));
-    this.stageLayer.add(this.progressPill(cx, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
-    this.stageLayer.add(this.progressPill(cx + 220, stageY + 207, 'Paint', vehicle.paint, 'icon_paint'));
+    if (this.state.tutorialComplete) {
+      this.stageLayer.add(this.progressPill(cx - 220, stageY + 207, 'Clean', vehicle.clean, 'icon_clean'));
+      this.stageLayer.add(this.progressPill(cx, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
+      this.stageLayer.add(this.progressPill(cx + 220, stageY + 207, 'Paint', vehicle.paint, 'icon_paint'));
+    } else {
+      this.stageLayer.add(this.progressPill(cx - 255, stageY + 207, 'Trash', vehicle.trash, 'dirt_cluster'));
+      this.stageLayer.add(this.progressPill(cx - 85, stageY + 207, 'Wash', vehicle.clean, 'icon_clean'));
+      this.stageLayer.add(this.progressPill(cx + 85, stageY + 207, 'Repair', vehicle.repair, 'icon_repair'));
+      this.stageLayer.add(this.progressPill(cx + 255, stageY + 207, 'Sell', this.state.phase === 'ready' ? 1 : 0, 'coin'));
+    }
   }
 
   private stageCopy(title: string, body: string, color: string): void {
@@ -477,10 +539,26 @@ export class GameScene extends Phaser.Scene {
 
   private drawContextActions(): void {
     const y = this.layout.height - 154;
-    if (this.state.phase === 'waiting') {
+    if (this.state.phase === 'delivered') {
+      this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🔓', 'Open Container', () => this.openContainer(), !this.stageBusy, 0xfacc15, Math.min(220, this.layout.width - 48)));
+    }
+    if (this.state.phase === 'waiting' && this.state.tutorialComplete) {
       this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🎁', 'Free', () => this.freeContainer(), true, 0x22c55e, Math.min(156, this.layout.width - 48)));
     }
-    if (this.state.current && ['revealed', 'cleaning', 'repairing', 'painting'].includes(this.state.phase)) {
+    if (this.state.current && !this.state.tutorialComplete && ['revealed', 'trashing', 'cleaning', 'repairing'].includes(this.state.phase)) {
+      const actions = [
+        () => this.restore('trash'),
+        () => this.restore('clean'),
+        () => this.restore('repair')
+      ];
+      const icons = ['🧹', '🧽', '🔧'];
+      const colors = [0xfacc15, 0x38bdf8, 0xf97316];
+      const labels = ['Trash', 'Wash', 'Repair'];
+      const step = Math.min(this.state.tutorialStep, 2);
+      this.navLayer.add(this.actionButton(this.layout.width / 2, y, icons[step], labels[step], actions[step], !this.stageBusy, colors[step], Math.min(176, this.layout.width - 48)));
+    }
+    if (this.state.current && this.state.tutorialComplete && this.state.phase === 'revealed') this.drawDecisionActions(y);
+    if (this.state.current && this.state.tutorialComplete && ['cleaning', 'repairing', 'painting'].includes(this.state.phase)) {
       const cx = this.layout.width / 2;
       const spacing = Math.min(170, Math.max(112, this.layout.width / 4.1));
       const buttonWidth = Math.min(146, Math.max(96, spacing - 18));
@@ -490,9 +568,84 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private drawDecisionActions(y: number): void {
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    const cx = this.layout.width / 2;
+    const spacing = Math.min(150, Math.max(104, this.layout.width / 5.8));
+    const width = Math.min(134, Math.max(92, spacing - 12));
+    const actions = [
+      ['🔧', 'Restore', 0x22c55e, () => this.startRestoration()],
+      ['💵', money(vehicle.instantSaleOffer), 0xfacc15, () => this.sellVehicleNow()],
+      ['♻️', money(vehicle.scrapValue), 0xef4444, () => this.scrapVehicle()],
+      ['🏠', 'Garage', 0x60a5fa, () => this.storeVehicle()],
+      ['⭐', 'Keep', rarityTint[vehicle.rarity], () => this.keepForCollection()]
+    ] as const;
+    actions.forEach(([icon, title, tint, action], index) => {
+      this.navLayer.add(this.actionButton(cx + (index - 2) * spacing, y, icon, title, action, !this.stageBusy, tint, width));
+    });
+  }
+
+  private startRestoration(): void {
+    if (!this.state.current) return;
+    this.state.phase = 'cleaning';
+    this.render();
+    this.toast(`Restore for about ${money(this.state.current.repairCostEstimate)} to chase ${money(this.state.current.potentialSale)}.`);
+  }
+
+  private sellVehicleNow(): void {
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    const offer = vehicle.instantSaleOffer;
+    this.state.money += offer;
+    this.state.totalEarned += offer;
+    this.state.vehiclesSold += 1;
+    this.flyCoins(offer);
+    this.showRewardWindow('QUICK SALE', `${vehicle.name} • ${money(offer)}`, vehicle.rarity);
+    this.finishVehicleDecision(`Sold immediately for ${money(offer)}.`);
+  }
+
+  private scrapVehicle(): void {
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    const value = vehicle.scrapValue;
+    this.state.money += value;
+    this.state.totalEarned += value;
+    this.flyCoins(value);
+    this.particles.burst(this.layout.width / 2, this.layout.height * 0.55, 0xef4444, 32);
+    this.showRewardWindow('SCRAPPED FOR PARTS', `${vehicle.name} • ${money(value)}`, vehicle.rarity);
+    this.finishVehicleDecision(`Scrapped for ${money(value)} in usable parts.`);
+  }
+
+  private storeVehicle(): void {
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    this.state.storedVehicles += 1;
+    this.showRewardWindow('GARAGE STORED', `${vehicle.name} is waiting for a better market.`, vehicle.rarity);
+    this.finishVehicleDecision(`${vehicle.name} moved to garage storage.`);
+  }
+
+  private keepForCollection(): void {
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    if (!this.state.collection.includes(vehicle.name)) this.state.collection.push(vehicle.name);
+    this.state.reputation += vehicle.rarity === 'legendary' || vehicle.rarity === 'mythic' ? 2 : 1;
+    this.showRewardWindow('COLLECTION PIECE', `${vehicle.name} increased your reputation.`, vehicle.rarity);
+    this.finishVehicleDecision(`${vehicle.name} kept for the collection.`);
+  }
+
+  private finishVehicleDecision(message: string): void {
+    this.state.current = undefined;
+    this.state.phase = 'waiting';
+    this.claimReadyMissions();
+    this.saveState();
+    this.render();
+    this.toast(message);
+  }
+
   private drawBottomNavigation(): void {
     const actions: NavAction[] = [
-      { icon: '🚚', title: 'Buy', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
+      { icon: '🚚', title: this.state.tutorialComplete ? 'Buy' : 'Locked', tint: 0xf97316, action: () => this.buyContainer(), enabled: () => this.state.tutorialComplete && this.state.phase === 'waiting' && this.state.money >= this.state.containerPrice },
       { icon: '🏪', title: 'Goals', tint: 0x38bdf8, action: () => this.toast(`Next unlock: ${featureUnlocks.find((u) => u.level > this.state.level)?.name ?? 'Empire complete'}`), enabled: () => true },
       { icon: '💰', title: 'Sell', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => this.state.phase === 'ready' },
       { icon: '🔧', title: 'Upgrade', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
@@ -556,6 +709,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private currentObjective(): string {
+    if (this.state.phase === 'delivered') return 'Open container';
+    if (!this.state.tutorialComplete) return tutorialSteps[Math.min(this.state.tutorialStep, tutorialSteps.length - 1)];
     const mission = this.state.dailyMissions?.find((item) => !item.claimed);
     if (mission) return mission.title;
     if (this.state.phase === 'waiting') return 'Buy next container';
@@ -565,6 +720,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private buyContainer(free = false): void {
+    if (!this.state.tutorialComplete) return this.toast('Finish the first flip to unlock container buying.');
+    if (this.stageBusy) return this.toast('Crew is already working on this container.');
     if (this.state.phase !== 'waiting') return this.toast('Finish the current container first.');
     if (!free && this.state.money < this.state.containerPrice) return this.toast(`Need ${money(this.state.containerPrice)} to buy this container.`);
     if (!free) this.state.money -= this.state.containerPrice;
@@ -576,10 +733,20 @@ export class GameScene extends Phaser.Scene {
     this.audio.play('engine');
     this.clearLayer(this.cinematicLayer);
     this.render();
-    this.playDeliveryCinematic(() => this.openContainer());
+    this.playDeliveryCinematic(() => this.containerDelivered());
+  }
+
+  private containerDelivered(): void {
+    this.state.phase = 'delivered';
+    this.stageBusy = false;
+    this.clearLayer(this.cinematicLayer);
+    this.render();
+    this.toast('Container delivered. Open it when ready!');
   }
 
   private openContainer(): void {
+    if (this.state.phase !== 'delivered' || this.stageBusy) return;
+    this.stageBusy = true;
     this.state.phase = 'opening';
     this.clearLayer(this.cinematicLayer);
     this.render();
@@ -592,10 +759,11 @@ export class GameScene extends Phaser.Scene {
       if (this.state.current && !this.state.collection.includes(this.state.current.name)) this.state.collection.push(this.state.current.name);
       this.refreshMissions();
       this.stageBusy = false;
+      this.playRarityReveal(this.state.current?.rarity ?? 'common');
       this.clearLayer(this.cinematicLayer);
       this.render();
       this.toast(`Found ${this.state.current?.name}! Restore it for profit.`);
-      this.showRewardWindow('CONTAINER REVEALED', `${this.state.current?.name} • ${this.state.current?.rarity.toUpperCase()}`, this.state.current?.rarity ?? 'common');
+      this.showRewardWindow(this.state.current?.specialContainer ? specialContainerNames[this.state.current.specialContainer] : 'CONTAINER REVEALED', `${this.state.current?.name} • ${this.state.current?.rarity.toUpperCase()}`, this.state.current?.rarity ?? 'common');
       this.audio.play('reward');
       this.audio.setMusicIntensity(this.state.level);
       this.cameraPulse();
@@ -606,22 +774,29 @@ export class GameScene extends Phaser.Scene {
     this.yandex.showRewarded('free-container', () => this.buyContainer(true));
   }
 
-  private restore(step: 'clean' | 'repair' | 'paint'): void {
+  private restore(step: 'trash' | 'clean' | 'repair' | 'paint'): void {
+    if (this.stageBusy) return this.toast('Crew is finishing the current job.');
     const vehicle = this.state.current;
     if (!vehicle) return;
+    this.stageBusy = true;
     const before = vehicle[step];
-    vehicle[step] = Math.min(1, vehicle[step] + 0.34 + this.state.reputation * 0.02);
-    const complete = vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1;
-    this.state.phase = complete ? 'ready' : step === 'clean' ? 'cleaning' : step === 'repair' ? 'repairing' : 'painting';
+    const stepAmount = this.state.tutorialComplete ? 0.34 + this.state.reputation * 0.02 : 1;
+    vehicle[step] = Math.min(1, vehicle[step] + stepAmount);
+    const complete = this.state.tutorialComplete
+      ? vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1
+      : vehicle.trash >= 1 && vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1;
+    this.state.phase = complete ? 'ready' : step === 'trash' ? 'trashing' : step === 'clean' ? 'cleaning' : step === 'repair' ? 'repairing' : 'painting';
     if (complete) {
       this.state.vehiclesRestored += 1;
       this.claimReadyMissions();
     }
-    this.audio.play(step === 'clean' ? 'dust' : step === 'paint' ? 'reward' : 'tool');
+    this.audio.play(step === 'trash' || step === 'clean' ? 'dust' : step === 'paint' ? 'reward' : 'tool');
     this.render();
     this.playWorkAnimation(step, vehicle[step] - before);
+    this.time.delayedCall(1100, () => { this.stageBusy = false; });
+    if (!this.state.tutorialComplete) this.rewardTutorialStep(step);
     if (complete) {
-      this.toast('Restoration complete. Customers are making offers!');
+      this.toast(this.state.tutorialComplete ? 'Restoration complete. Customers are making offers!' : 'Great work. Now sell the restored car!');
       this.showRewardWindow('RESTORATION COMPLETE', `${vehicle.name} is ready for buyers`, vehicle.rarity);
       this.audio.play('upgrade');
     }
@@ -633,7 +808,7 @@ export class GameScene extends Phaser.Scene {
     const quality = (vehicle.clean + vehicle.repair + vehicle.paint) / 3;
     const boost = Date.now() < this.state.boostUntil ? 2 : 1;
     const vip = this.state.level >= 5 && vehicle.rarity !== 'common' && this.rng.next() > 0.58;
-    const collector = this.state.level >= 6 && (vehicle.rarity === 'epic' || vehicle.rarity === 'legendary') && this.rng.next() > 0.42;
+    const collector = this.state.level >= 6 && (vehicle.rarity === 'epic' || vehicle.rarity === 'legendary' || vehicle.rarity === 'mythic') && this.rng.next() > 0.42;
     const offer = Math.floor(vehicle.value * (0.58 + quality * 0.85 + this.state.reputation * 0.03) * boost * (vip ? 1.25 : 1) * (collector ? 1.45 : 1));
     this.state.money += offer;
     this.state.totalEarned += offer;
@@ -641,7 +816,14 @@ export class GameScene extends Phaser.Scene {
     this.state.vehiclesSold += 1;
     if (vip) this.state.vipCustomers += 1;
     if (collector) this.state.collectors += 1;
-    if (vehicle.rarity === 'legendary') { const ach = this.state.achievements.find((m) => m.id === 'ach_legend'); if (ach) ach.progress = 1; }
+    if (vehicle.rarity === 'legendary' || vehicle.rarity === 'mythic') { const ach = this.state.achievements.find((m) => m.id === 'ach_legend'); if (ach) ach.progress = 1; }
+    if (!this.state.tutorialComplete) {
+      this.state.tutorialComplete = true;
+      this.state.tutorialStep = tutorialSteps.length;
+      this.state.money += 350;
+      this.state.xp += 35;
+      this.toast('Tutorial complete! Container purchasing unlocked.');
+    }
     this.state.xp += Math.floor(25 + offer / 120);
     while (this.state.xp >= this.state.level * 100) {
       this.state.xp -= this.state.level * 100;
@@ -682,30 +864,120 @@ export class GameScene extends Phaser.Scene {
     const secretBonus = this.state.level >= 8 && (this.state.containersOpened + 1) % 15 === 0 ? 3 : 0;
     const auctionBonus = this.state.level >= 4 && (this.state.containersOpened + 1) % 10 === 0 ? 2 : 0;
     const rarity = this.rng.pick(rarityDeck.slice(0, Math.min(rarityDeck.length, 4 + bonus + auctionBonus + secretBonus + Math.floor(this.state.level / 2))));
-    const base = { common: 1300, uncommon: 2100, rare: 4200, epic: 9000, legendary: 24000 }[rarity];
+    const base = { common: 1300, uncommon: 2100, rare: 4200, epic: 9000, legendary: 24000, mythic: 52000 }[rarity];
     const condition = 0.22 + this.rng.next() * 0.38;
-    return {
-      id: crypto.randomUUID(), name: this.rng.pick(vehicleNames[vehicleClass]), class: vehicleClass, rarity,
+    const vehicle: ImportVehicle = {
+      id: this.createId(), name: this.rng.pick(vehicleNames[vehicleClass]), class: vehicleClass, rarity,
       value: Math.floor(base * (1 + this.state.level * 0.18) * (0.75 + condition)), buyPrice: this.state.containerPrice, condition,
-      dirt: 0.45 + this.rng.next() * 0.5, damage: 0.35 + this.rng.next() * 0.55, color: this.rng.pick(paintColors), clean: 0, repair: 0, paint: 0
+      dirt: 0.45 + this.rng.next() * 0.5, damage: 0.35 + this.rng.next() * 0.55, color: this.rng.pick(paintColors), trash: 0, clean: 0, repair: 0, paint: 0,
+      conditionTags: [], repairCostEstimate: 0, instantSaleOffer: 0, scrapValue: 0, potentialSale: 0
     };
+    vehicle.specialContainer = this.rollSpecialContainer(rarity);
+    vehicle.conditionTags = this.conditionTags(vehicle);
+    vehicle.repairCostEstimate = this.estimateRepairCost(vehicle);
+    vehicle.potentialSale = this.estimatePotentialSale(vehicle);
+    vehicle.instantSaleOffer = this.estimateInstantSale(vehicle);
+    vehicle.scrapValue = this.estimateScrapValue(vehicle);
+    return vehicle;
   }
 
+  private createId(): string {
+    return globalThis.crypto?.randomUUID?.() ?? `vehicle-${Date.now().toString(36)}-${Math.floor(this.rng.next() * 1_000_000).toString(36)}`;
+  }
+
+  private rollSpecialContainer(rarity: Rarity): SpecialContainer | undefined {
+    const roll = this.rng.next();
+    if (rarity === 'mythic' || roll > 0.992) return 'golden';
+    if (roll > 0.982) return 'collector';
+    if (roll > 0.972) return 'military';
+    if (roll > 0.958) return 'classic';
+    return undefined;
+  }
+
+  private conditionTags(vehicle: ImportVehicle): string[] {
+    const tags: string[] = [];
+    if (vehicle.dirt > 0.72) tags.push('Covered with mud');
+    if (vehicle.dirt > 0.55) tags.push('Trash-filled cabin');
+    if (vehicle.damage > 0.72) tags.push('Heavy rust');
+    if (vehicle.damage > 0.62) tags.push('Damaged bumper');
+    if (vehicle.condition < 0.34) tags.push('Broken windows');
+    if (vehicle.condition < 0.3) tags.push('Flat tires');
+    if (vehicle.damage > 0.8) tags.push('Broken engine');
+    if (vehicle.condition < 0.42 && this.rng.next() > 0.5) tags.push('Missing mirrors');
+    if (vehicle.condition < 0.45 && this.rng.next() > 0.55) tags.push('Broken headlights');
+    return tags.slice(0, 5);
+  }
+
+  private estimateRepairCost(vehicle: ImportVehicle): number {
+    return Math.floor(vehicle.value * (0.12 + vehicle.damage * 0.22 + vehicle.dirt * 0.06));
+  }
+
+  private estimatePotentialSale(vehicle: ImportVehicle): number {
+    const special = vehicle.specialContainer ? 1.15 : 1;
+    return Math.floor(vehicle.value * (1.18 + this.state.reputation * 0.035) * special);
+  }
+
+  private estimateInstantSale(vehicle: ImportVehicle): number {
+    return Math.floor(vehicle.value * (0.42 + vehicle.condition * 0.25));
+  }
+
+  private estimateScrapValue(vehicle: ImportVehicle): number {
+    return Math.floor(vehicle.value * (0.22 + vehicle.damage * 0.12));
+  }
+
+  private drawContainerInfo(cx: number, stageY: number, vehicle: ImportVehicle): void {
+    if (this.state.phase !== 'revealed' && this.state.phase !== 'ready') return;
+    const x = Math.min(this.layout.width - 170, cx + 410);
+    const y = stageY + 25;
+    this.stageLayer.add(this.glassPanel(x, y, 300, 212, 22, 0x020617, 0.78, rarityTint[vehicle.rarity], 0.38));
+    this.stageLayer.add(this.add.text(x, y - 82, vehicle.specialContainer ? specialContainerNames[vehicle.specialContainer] : `${vehicle.rarity.toUpperCase()} FIND`, {
+      fontFamily: 'Inter, Arial', fontSize: '16px', color: rarityText[vehicle.rarity], fontStyle: '900', align: 'center', wordWrap: { width: 260 }
+    }).setOrigin(0.5));
+    const tags = vehicle.conditionTags.length ? vehicle.conditionTags.join(' • ') : 'Surprisingly intact';
+    this.stageLayer.add(this.add.text(x, y - 45, tags, {
+      fontFamily: 'Inter, Arial', fontSize: '12px', color: '#e2e8f0', fontStyle: '800', align: 'center', wordWrap: { width: 260 }
+    }).setOrigin(0.5));
+    const rows = [
+      ['Est. value', money(vehicle.value), '#facc15'],
+      ['Restore cost', money(vehicle.repairCostEstimate), '#fb923c'],
+      ['Potential sale', money(vehicle.potentialSale), '#86efac'],
+      ['Profit est.', money(vehicle.potentialSale - vehicle.repairCostEstimate - vehicle.buyPrice), '#38bdf8']
+    ];
+    rows.forEach(([label, value, color], index) => {
+      const rowY = y - 8 + index * 33;
+      this.stageLayer.add(this.add.text(x - 118, rowY, label, { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#94a3b8', fontStyle: '800' }).setOrigin(0, 0.5));
+      this.stageLayer.add(this.add.text(x + 118, rowY, value, { fontFamily: 'Inter, Arial', fontSize: '14px', color, fontStyle: '900' }).setOrigin(1, 0.5));
+    });
+  }
+
+
+  private startTutorialCinematic(): void {
+    if (this.state.tutorialComplete || this.state.current || this.stageBusy) return;
+    this.state.current = this.rollVehicle(3);
+    this.state.current.paint = 1;
+    this.state.phase = 'delivering';
+    this.stageBusy = true;
+    this.render();
+    this.playDeliveryCinematic(() => this.containerDelivered());
+    this.toast('A tow truck just found your first flip!');
+  }
 
   private playDeliveryCinematic(onComplete: () => void): void {
     const cx = this.layout.width / 2;
     const y = Math.max(215, this.layout.height * 0.47);
     this.cameras.main.pan(cx, y, 650, 'Sine.easeInOut');
     this.cameras.main.zoomTo(1.045, 650, 'Sine.easeInOut');
+    const truck = this.add.image(-220, y + 120, 'tow_truck').setScale(0.82).setDepth(56);
     const forklift = this.add.image(-160, y + 98, 'forklift').setScale(0.92).setDepth(58);
     const container = this.add.image(-30, y + 10, 'container_closed').setScale(0.92).setDepth(57);
     const worker = this.add.image(-70, y + 128, 'worker').setScale(0.58).setDepth(59);
-    this.cinematicLayer.add([forklift, container, worker]);
+    this.cinematicLayer.add([truck, forklift, container, worker]);
     this.activeVehicle = container;
+    this.tweens.add({ targets: truck, x: cx - 360, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: forklift, x: cx - 210, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: container, x: cx - 36, duration: 1250, ease: 'Cubic.InOut' });
     this.tweens.add({ targets: worker, x: cx + 210, duration: 1250, ease: 'Sine.InOut' });
-    this.tweens.add({ targets: [container, forklift], y: '+=7', duration: 105, yoyo: true, repeat: 12, ease: 'Sine.InOut' });
+    this.tweens.add({ targets: [container, forklift, truck], y: '+=7', duration: 105, yoyo: true, repeat: 12, ease: 'Sine.InOut' });
     this.time.delayedCall(350, () => this.emitDust(cx - 250, y + 100, 18));
     this.time.delayedCall(1050, () => this.emitDust(cx - 70, y + 108, 24));
     this.time.delayedCall(1450, () => {
@@ -720,21 +992,31 @@ export class GameScene extends Phaser.Scene {
     this.audio.play('door');
     this.cameras.main.pan(cx, y - 15, 900, 'Sine.easeInOut');
     this.cameras.main.zoomTo(1.06, 900, 'Sine.easeInOut');
+    const worker = this.add.image(cx - 230, y + 112, 'worker').setScale(0.62).setDepth(63);
+    this.cinematicLayer.add(worker);
+    this.tweens.add({ targets: worker, x: cx - 118, duration: 520, ease: 'Sine.Out' });
+    this.tweens.add({ targets: worker, y: worker.y - 10, duration: 160, yoyo: true, repeat: 5, delay: 420 });
+    this.tweens.add({ targets: worker, x: cx + 210, alpha: 0, duration: 540, delay: 1650, ease: 'Sine.In', onComplete: () => worker.destroy() });
     for (let i = 0; i < 5; i++) this.time.delayedCall(i * 260, () => this.emitSmoke(cx - 130 + i * 60, y - 20 + (i % 2) * 24));
     for (let i = 0; i < 4; i++) this.time.delayedCall(280 + i * 260, () => this.emitDust(cx - 150 + i * 95, y + 88, 18));
+    const silhouette = this.add.image(cx, y + 35, 'vehicle_body').setScale(1.05).setTint(0x020617).setAlpha(0).setDepth(61);
+    const flashlight = this.add.ellipse(cx - 20, y + 12, 360, 120, 0xfef3c7, 0).setDepth(64).setBlendMode('ADD');
     const reveal = this.add.image(cx, y + 35, 'vehicle_body').setScale(0.15).setAlpha(0).setTint(this.state.current?.color ?? 0xffffff).setDepth(62);
-    this.cinematicLayer.add(reveal);
-    this.tweens.add({ targets: reveal, alpha: 1, scale: 1.15, x: cx + 8, duration: 1500, delay: 550, ease: 'Elastic.Out' });
+    this.cinematicLayer.add([silhouette, flashlight, reveal]);
+    this.tweens.add({ targets: silhouette, alpha: 0.72, duration: 260, delay: 420, ease: 'Sine.Out' });
+    this.tweens.add({ targets: flashlight, alpha: 0.38, duration: 160, delay: 900, yoyo: true, repeat: 1, ease: 'Sine.Out' });
+    this.tweens.add({ targets: reveal, alpha: 1, scale: 1.15, x: cx + 8, duration: 1500, delay: 1150, ease: 'Elastic.Out' });
+    this.tweens.add({ targets: silhouette, alpha: 0, duration: 260, delay: 1150, ease: 'Sine.In' });
     this.tweens.add({ targets: reveal, angle: 2, duration: 80, yoyo: true, repeat: 15, delay: 550 });
     this.time.delayedCall(1900, () => this.cameras.main.zoomTo(1, 500, 'Sine.easeInOut'));
   }
 
-  private playWorkAnimation(step: 'clean' | 'repair' | 'paint', delta: number): void {
+  private playWorkAnimation(step: 'trash' | 'clean' | 'repair' | 'paint', delta: number): void {
     const cx = this.layout.width / 2;
     const y = this.layout.height * 0.55;
-    const color = step === 'paint' ? this.state.current?.color ?? 0xa855f7 : step === 'clean' ? 0x38bdf8 : 0xfacc15;
+    const color = step === 'paint' ? this.state.current?.color ?? 0xa855f7 : step === 'clean' ? 0x38bdf8 : step === 'trash' ? 0xfacc15 : 0xf97316;
     this.particles.burst(cx, y, color, 22 + Math.ceil(delta * 20));
-    this.emitDust(cx - 80, y + 40, step === 'clean' ? 24 : 12);
+    this.emitDust(cx - 80, y + 40, step === 'trash' ? 30 : step === 'clean' ? 24 : 12);
     const worker = this.add.image(cx - 260, y + 78, 'worker').setScale(0.55).setDepth(60);
     this.cinematicLayer.add(worker);
     this.tweens.add({ targets: worker, x: cx - 80, duration: 360, ease: 'Sine.Out' });
@@ -764,13 +1046,53 @@ export class GameScene extends Phaser.Scene {
     const cx = this.layout.width / 2;
     const y = 218;
     const card = this.add.container(cx, y + 35).setAlpha(0).setScale(0.78).setDepth(88);
-    const strokeColor = { common: 0xcbd5e1, uncommon: 0x34d399, rare: 0x60a5fa, epic: 0xc084fc, legendary: 0xfacc15 }[rarity];
+    const strokeColor = rarityTint[rarity];
     card.add(this.glassPanel(0, 0, 430, 128, 26, 0x111827, 0.92, strokeColor, 0.6));
     card.add(this.add.text(0, -30, title, { fontFamily: 'Inter, Arial', fontSize: '25px', color: '#fef3c7', fontStyle: '900' }).setOrigin(0.5));
     card.add(this.add.text(0, 12, detail, { fontFamily: 'Inter, Arial', fontSize: '17px', color: rarityText[rarity], fontStyle: '800', align: 'center', wordWrap: { width: 370 } }).setOrigin(0.5));
     this.rewardLayer.add(card);
     this.tweens.add({ targets: card, y, alpha: 1, scale: 1, duration: 360, ease: 'Back.Out' });
     this.tweens.add({ targets: card, y: y - 28, alpha: 0, scale: 0.9, duration: 420, delay: 1800, ease: 'Sine.In', onComplete: () => card.destroy() });
+  }
+
+  private playRarityReveal(rarity: Rarity): void {
+    const color = rarityTint[rarity];
+    const cx = this.layout.width / 2;
+    const y = Math.max(215, this.layout.height * 0.47) + 35;
+    const intensity = { common: 16, uncommon: 22, rare: 30, epic: 42, legendary: 64, mythic: 90 }[rarity];
+    this.particles.burst(cx, y, color, intensity);
+    this.cameras.main.flash(rarity === 'common' ? 90 : 180, (color >> 16) & 255, (color >> 8) & 255, color & 255);
+    this.cameras.main.shake(rarity === 'legendary' || rarity === 'mythic' ? 280 : 150, rarity === 'legendary' || rarity === 'mythic' ? 0.006 : 0.003);
+    this.cameras.main.zoomTo(rarity === 'legendary' || rarity === 'mythic' ? 1.075 : 1.035, 180, 'Sine.easeOut');
+    this.time.delayedCall(230, () => this.cameras.main.zoomTo(1, 520, 'Sine.easeInOut'));
+    if (rarity === 'legendary' || rarity === 'mythic') {
+      for (let i = 0; i < 3; i++) this.time.delayedCall(i * 140, () => this.particles.burst(cx, y - 35, color, 34));
+      this.audio.play('upgrade');
+    } else {
+      this.audio.play(rarity === 'rare' || rarity === 'epic' ? 'reward' : 'cash');
+    }
+  }
+
+  private rewardTutorialStep(step: 'trash' | 'clean' | 'repair' | 'paint'): void {
+    const order: Array<'trash' | 'clean' | 'repair'> = ['trash', 'clean', 'repair'];
+    const expected = order[this.state.tutorialStep];
+    if (step !== expected) return;
+    const reward = 120 + this.state.tutorialStep * 80;
+    this.state.money += reward;
+    this.state.xp += 20;
+    this.flyCoins(reward);
+    this.showRewardWindow('STEP COMPLETE', `${tutorialSteps[this.state.tutorialStep]} • +${money(reward)} • +20 XP`, 'uncommon');
+    this.state.tutorialStep += 1;
+    this.time.delayedCall(850, () => this.render());
+  }
+
+  private drawTutorialOverlay(): void {
+    const x = Math.min(this.layout.width - 185, Math.max(185, this.layout.width / 2));
+    const y = 156;
+    this.navLayer.add(this.glassPanel(x, y, 360, 104, 22, 0x020617, 0.86, 0xfacc15, 0.5));
+    this.navLayer.add(this.add.text(x, y - 34, 'FIRST FLIP', { fontFamily: 'Inter, Arial', fontSize: '18px', color: '#facc15', fontStyle: '900' }).setOrigin(0.5));
+    const labels = tutorialSteps.map((label, index) => `${index === this.state.tutorialStep ? '👉' : index < this.state.tutorialStep ? '✅' : '⬇'} ${index + 1}. ${label}`);
+    this.navLayer.add(this.add.text(x, y + 15, labels.join('   '), { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#f8fafc', fontStyle: '800', align: 'center', wordWrap: { width: 320 } }).setOrigin(0.5));
   }
 
   private cameraPulse(): void {
@@ -781,7 +1103,7 @@ export class GameScene extends Phaser.Scene {
 
   private spawnAmbientAction(): void {
     if (!this.scene.isActive('Game') || this.stageBusy) {
-      this.time.delayedCall(1200, () => this.spawnAmbientAction());
+      this.ambientTimer = this.time.delayedCall(1200, () => this.spawnAmbientAction());
       return;
     }
     const y = 610 + Phaser.Math.Between(-18, 28);
@@ -796,7 +1118,7 @@ export class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: worker, x: fromLeft ? this.layout.width + 80 : -80, duration: 6200, ease: 'Sine.InOut', onComplete: () => { this.activeWorkers = this.activeWorkers.filter((item) => item !== worker); worker.destroy(); } });
       this.tweens.add({ targets: worker, y: worker.y - 7, duration: 240, yoyo: true, repeat: 24, ease: 'Sine.InOut' });
     }
-    this.time.delayedCall(2400 + Phaser.Math.Between(0, 2800), () => this.spawnAmbientAction());
+    this.ambientTimer = this.time.delayedCall(2400 + Phaser.Math.Between(0, 2800), () => this.spawnAmbientAction());
   }
 
   private flyCoins(amount: number): void {
@@ -827,7 +1149,7 @@ export class GameScene extends Phaser.Scene {
     if (this.autosaveTimer >= 20) {
       this.autosaveTimer = 0;
       this.state.lastSave = Date.now();
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.state));
+      this.safeLocalSave();
     }
   }
 }
