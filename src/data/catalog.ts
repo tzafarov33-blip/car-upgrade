@@ -5,7 +5,8 @@ export const rarityMultiplier: Record<Rarity, number> = {
   uncommon: 1.28,
   rare: 1.72,
   epic: 2.45,
-  legendary: 3.8
+  legendary: 3.8,
+  mythic: 6.2
 };
 
 export const rarityColor: Record<Rarity, number> = {
@@ -13,7 +14,8 @@ export const rarityColor: Record<Rarity, number> = {
   uncommon: 0x43d17a,
   rare: 0x4aa3ff,
   epic: 0xc084fc,
-  legendary: 0xfacc15
+  legendary: 0xfacc15,
+  mythic: 0xff3df2
 };
 
 export const classes: Record<VehicleClass, { base: number; names: string[]; unlock: number; size: number }> = {
