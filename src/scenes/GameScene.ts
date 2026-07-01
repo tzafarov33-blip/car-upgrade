@@ -63,6 +63,10 @@ interface Mission {
   claimed: boolean;
 }
 
+type WorkerTask = 'Idle' | 'Inspecting' | 'Removing trash' | 'Washing' | 'Repairing' | 'Painting' | 'Polishing' | 'Starting engine' | 'Moving vehicle' | 'Resting';
+interface WorkerUpgradeSet { speed: number; cleaning: number; repair: number; painting: number; efficiency: number; movement: number; }
+interface WorkshopWorker { id: string; name: string; task: WorkerTask; vehicleId?: string; upgrades: WorkerUpgradeSet; x: number; y: number; targetX: number; targetY: number; anim: 'walking' | 'working' | 'carrying' | 'resting'; cooldown: number; }
+
 interface ImportState {
   money: number;
   level: number;
@@ -104,7 +108,14 @@ interface ImportState {
   eventName?: string;
   tutorialComplete: boolean;
   tutorialStep: number;
+  workerRoster: WorkshopWorker[];
+  repairSlots: number;
+  containerSlots: number;
+  containerQueue: ContainerTier[];
+  automationEnabled: boolean;
+  equipmentLevel: number;
 }
+
 
 interface NavAction {
   icon: string;
@@ -190,6 +201,10 @@ const customerTypes = ['Budget buyer', 'Collector', 'Luxury dealer', 'Museum', '
 const collectionClasses = ['City Cars', 'Sedans', 'SUVs', 'Pickup Trucks', 'Classic Cars', 'Sports Cars', 'Luxury Cars', 'Electric Cars', 'Concept Cars', 'Limited Editions', 'Prototype Vehicles', 'Secret Vehicles'] as const;
 const classDisplay: Record<VehicleClass, string> = { compact: 'City Cars', sedan: 'Sedans', offroad: 'SUVs', muscle: 'Classic Cars', sports: 'Sports Cars', super: 'Luxury Cars' };
 const workshopExpansions = ['Extra Repair Bays', 'Second Garage', 'Paint Department', 'Performance Shop', 'Engine Laboratory', 'Luxury Restoration Building', 'Vehicle Photography Studio', 'Auction Hall'];
+const workerHireCosts = [0, 100000, 350000, 900000, 2000000, 5000000];
+const workerNames = ['Mika', 'Rex', 'Lina', 'Otto', 'Vera', 'Hank'];
+const slotUnlockCosts = [0, 250000, 1250000];
+const equipmentUpgradeCosts = [0, 25000, 150000, 650000, 1800000];
 
 export class GameScene extends Phaser.Scene {
   private state!: ImportState;
@@ -234,6 +249,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-S', () => this.saveState());
     this.input.once('pointerdown', () => { this.audio.startAmbience(); this.audio.setMusicIntensity(this.state.level); });
     this.ambientTimer = this.time.delayedCall(700, () => this.spawnAmbientAction());
+    this.time.addEvent({ delay: 850, loop: true, callback: () => this.automationTick() });
     if (!this.state.tutorialComplete && this.state.phase === 'waiting' && !this.state.current) {
       this.time.delayedCall(450, () => this.startTutorialCinematic());
     }
@@ -266,7 +282,7 @@ export class GameScene extends Phaser.Scene {
 
   private newState(): ImportState {
     const now = Date.now();
-    return this.normalizeState({ money: 0, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, storedVehicles: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
+    return this.normalizeState({ money: 600, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, storedVehicles: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
   }
 
   private loadState(): ImportState {
@@ -298,7 +314,13 @@ export class GameScene extends Phaser.Scene {
     state.collectionBook ??= {};
     state.unlockedLocations ??= ['Abandoned Junkyard'];
     state.unlockedFeatures ??= [];
-    state.workers ??= 0;
+    state.workers ??= 1;
+    state.workerRoster ??= [this.createWorkerProfile(0)];
+    state.repairSlots ??= 1;
+    state.containerSlots ??= 1;
+    state.containerQueue ??= [];
+    state.automationEnabled ??= true;
+    state.equipmentLevel ??= 1;
     state.yardStage ??= 0;
     state.bestVehicleValue ??= 0;
     state.totalEarned ??= 0;
@@ -314,6 +336,12 @@ export class GameScene extends Phaser.Scene {
     state.dailyStreak ??= 1;
     state.workerXp ??= 0;
     state.expansions ??= [];
+    while (state.workerRoster.length < Math.max(1, state.workers)) state.workerRoster.push(this.createWorkerProfile(state.workerRoster.length));
+    state.workerRoster = state.workerRoster.slice(0, 6);
+    state.workers = Math.max(1, Math.min(6, state.workerRoster.length));
+    state.repairSlots = Math.max(1, Math.min(3, state.repairSlots));
+    state.containerSlots = Math.max(1, Math.min(3, state.containerSlots));
+    state.equipmentLevel = Math.max(1, Math.min(5, state.equipmentLevel));
     this.rebuildCollectionBook(state);
     state.eventName ??= eventNames[Math.floor(now / 86_400_000) % eventNames.length];
     state.tutorialComplete ??= state.containersOpened > 0 || state.vehiclesSold > 0;
@@ -476,7 +504,7 @@ export class GameScene extends Phaser.Scene {
   private applyUnlocks(state = this.state): void {
     for (const unlock of locationUnlocks) if (state.level >= unlock.level && !state.unlockedLocations.includes(unlock.name)) state.unlockedLocations.push(unlock.name);
     for (const unlock of featureUnlocks) if (state.level >= unlock.level && !state.unlockedFeatures.includes(unlock.name)) state.unlockedFeatures.push(unlock.name);
-    state.workers = Math.max(state.workers, Math.min(6, Math.floor((state.level + 1) / 2)));
+    state.workers = Math.max(1, Math.min(6, state.workerRoster?.length ?? state.workers ?? 1));
     state.yardStage = Math.min(5, Math.floor((state.level - 1) / 2));
   }
 
@@ -504,6 +532,115 @@ export class GameScene extends Phaser.Scene {
     } catch (error) {
       console.warn('[GameScene] Local save unavailable; continuing without crashing.', error);
     }
+  }
+
+
+  private createWorkerProfile(index: number): WorkshopWorker {
+    return {
+      id: `worker-${index + 1}`,
+      name: workerNames[index] ?? `Worker ${index + 1}`,
+      task: index === 0 ? 'Idle' : 'Resting',
+      upgrades: { speed: 1, cleaning: 1, repair: 1, painting: 1, efficiency: 1, movement: 1 },
+      x: 500 + index * 42,
+      y: 620,
+      targetX: 590 + index * 28,
+      targetY: 520,
+      anim: 'resting',
+      cooldown: 0
+    };
+  }
+
+  private automationTick(): void {
+    if (!this.state?.automationEnabled || this.stageBusy || !this.state.tutorialComplete) return;
+    if (!this.state.current && this.state.phase === 'waiting' && this.state.containerQueue.length > 0) {
+      this.buyContainer(this.state.containerQueue.shift());
+      return;
+    }
+    const vehicle = this.state.current;
+    if (!vehicle) return;
+    const worker = this.state.workerRoster.find((item) => item.cooldown <= Date.now()) ?? this.state.workerRoster[0];
+    if (!worker) return;
+    const next = this.nextRestorationStep(vehicle);
+    if (this.state.phase === 'delivered') { worker.task = 'Moving vehicle'; worker.anim = 'carrying'; this.openContainer(); return; }
+    if (this.state.phase === 'revealed' && next === 0) { this.assignWorker(worker, 'Inspecting'); this.inspectVehicle(); return; }
+    if (!['inspecting', 'trashing', 'cleaning', 'repairing', 'painting', 'polishing', 'starting'].includes(this.state.phase)) return;
+    if (next === 1) return this.automatedRestore(worker, 'trash', 'Removing trash');
+    if (next === 2) return this.automatedRestore(worker, 'clean', 'Washing');
+    if (next === 3) return this.automatedRestore(worker, 'repair', 'Repairing');
+    if (next === 4) return this.automatedRestore(worker, 'paint', 'Painting');
+    if (next === 5) return this.automatedRestore(worker, 'polish', 'Polishing');
+    if (next === 6 && vehicle.polish >= 1 && vehicle.engineStart < 1) { this.assignWorker(worker, 'Starting engine'); this.startEngine(); }
+  }
+
+  private automatedRestore(worker: WorkshopWorker, step: 'trash' | 'clean' | 'repair' | 'paint' | 'polish', task: WorkerTask): void {
+    this.assignWorker(worker, task);
+    this.restore(step);
+  }
+
+  private assignWorker(worker: WorkshopWorker, task: WorkerTask): void {
+    const skill = task === 'Washing' || task === 'Removing trash' ? worker.upgrades.cleaning : task === 'Repairing' ? worker.upgrades.repair : task === 'Painting' || task === 'Polishing' ? worker.upgrades.painting : worker.upgrades.speed;
+    worker.task = task;
+    worker.vehicleId = this.state.current?.id;
+    worker.anim = task === 'Moving vehicle' ? 'carrying' : 'working';
+    worker.cooldown = Date.now() + Math.max(320, 1250 - skill * 140 - worker.upgrades.efficiency * 70 - this.state.equipmentLevel * 60);
+    worker.targetX = this.layout.width / 2 + this.rng.int(-120, 120);
+    worker.targetY = Math.max(280, this.layout.height * 0.47) + this.rng.int(10, 92);
+  }
+
+  private queueContainer(tier: ContainerTier): void {
+    if (this.state.containerQueue.length >= this.state.containerSlots) return this.toast('Container queue is full. Expand container slots.');
+    const price = this.containerPrice(tier);
+    if (this.state.money < price) return this.toast(`Need ${money(price)} for a ${containerTiers[tier].label} container.`);
+    this.state.money -= price;
+    this.state.containerQueue.push(tier);
+    this.toast(`${containerTiers[tier].label} container queued for workers.`);
+    this.render();
+  }
+
+  private hireWorker(): void {
+    const index = this.state.workerRoster.length;
+    if (index >= 6) return this.toast('Maximum 6 workers hired.');
+    const cost = workerHireCosts[index];
+    if (this.state.money < cost) return this.toast(`Worker ${index + 1} costs ${money(cost)}.`);
+    this.state.money -= cost;
+    this.state.workerRoster.push(this.createWorkerProfile(index));
+    this.state.workers = this.state.workerRoster.length;
+    this.toast(`${workerNames[index]} hired. More automation capacity online.`);
+    this.render();
+  }
+
+  private upgradeWorker(worker: WorkshopWorker, key: keyof WorkerUpgradeSet): void {
+    const current = worker.upgrades[key];
+    if (current >= 5) return this.toast(`${worker.name}'s ${key} is maxed.`);
+    const cost = Math.floor(2500 * current * current * (key === 'efficiency' ? 1.4 : 1));
+    if (this.state.money < cost) return this.toast(`${worker.name} ${key} level ${current + 1} costs ${money(cost)}.`);
+    this.state.money -= cost;
+    worker.upgrades[key] += 1;
+    this.toast(`${worker.name} ${key} upgraded to ${worker.upgrades[key]}. Visible speed increased.`);
+    this.render();
+  }
+
+  private expandRepairSlot(): void {
+    if (this.state.repairSlots >= 3) return this.toast('All 3 repair slots unlocked.');
+    const cost = slotUnlockCosts[this.state.repairSlots];
+    if (this.state.money < cost) return this.toast(`Repair Slot ${this.state.repairSlots + 1} costs ${money(cost)}.`);
+    this.state.money -= cost;
+    this.state.repairSlots += 1;
+    this.state.expansions.push(`Repair Slot ${this.state.repairSlots}`);
+    this.applyUnlocks();
+    this.toast(`Repair Slot ${this.state.repairSlots} unlocked.`);
+    this.render();
+  }
+
+  private upgradeEquipment(): void {
+    if (this.state.equipmentLevel >= 5) return this.toast('Equipment is fully upgraded.');
+    const cost = equipmentUpgradeCosts[this.state.equipmentLevel];
+    if (this.state.money < cost) return this.toast(`Equipment upgrade costs ${money(cost)}.`);
+    this.state.money -= cost;
+    this.state.equipmentLevel += 1;
+    this.state.expansions.push(`Equipment Level ${this.state.equipmentLevel}`);
+    this.toast('Garage floor, tools, lights and storage visibly improved.');
+    this.render();
   }
 
   private drawWorld(): void {
@@ -562,8 +699,10 @@ export class GameScene extends Phaser.Scene {
     this.clearLayer(this.navLayer);
     this.drawPremiumHud();
     this.drawBusinessProgression();
+    this.drawRepairSlots();
     this.drawContainerStage();
     this.drawContextActions();
+    this.drawWorkerPanel();
     this.drawBottomNavigation();
     if (!this.state.tutorialComplete) this.drawTutorialOverlay();
     if (!this.hasRendered) {
@@ -744,6 +883,45 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: bodyText, y: y + 34, alpha: 1, duration: 360, delay: 90, ease: 'Cubic.Out' });
   }
 
+
+  private drawRepairSlots(): void {
+    const cx = this.layout.width / 2;
+    const y = Math.max(190, this.layout.height * 0.31);
+    const spacing = 190;
+    for (let i = 0; i < 3; i++) {
+      const unlocked = i < this.state.repairSlots;
+      const x = cx + (i - 1) * spacing;
+      this.stageLayer.add(this.glassPanel(x, y, 160, 72, 18, unlocked ? 0x102033 : 0x020617, unlocked ? 0.5 : 0.28, unlocked ? 0x22c55e : 0x64748b, 0.22));
+      this.stageLayer.add(this.add.text(x, y - 16, `Repair Slot ${i + 1}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: unlocked ? '#bbf7d0' : '#64748b', fontStyle: '900' }).setOrigin(0.5));
+      this.stageLayer.add(this.add.text(x, y + 12, unlocked ? (this.state.current && i === 0 ? 'ACTIVE VEHICLE' : 'Ready for queue') : `Unlock ${money(slotUnlockCosts[i])}`, { fontFamily: 'Inter, Arial', fontSize: '11px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
+    }
+  }
+
+  private drawWorkerPanel(): void {
+    const workers = this.state.workerRoster;
+    const panelW = Math.min(520, this.layout.width - 44);
+    const x = this.layout.width - panelW / 2 - 22;
+    const y = 146;
+    this.navLayer.add(this.glassPanel(x, y + 54, panelW, 126, 20, 0x07111f, 0.84, 0x22c55e, 0.24));
+    this.navLayer.add(this.add.text(x - panelW / 2 + 18, y + 4, `WORKER PANEL  ${workers.length}/6  •  Slots ${this.state.repairSlots}/3  •  Queue ${this.state.containerQueue.length}/${this.state.containerSlots}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#bbf7d0', fontStyle: '900' }));
+    workers.slice(0, 6).forEach((worker, index) => {
+      const wx = x - panelW / 2 + 56 + index * Math.min(76, (panelW - 110) / 6);
+      const wy = y + 50;
+      const workerIcon = this.add.image(wx, wy, 'worker').setScale(0.28 + worker.upgrades.movement * 0.015);
+      if (worker.anim === 'working') this.tweens.add({ targets: workerIcon, angle: 8, yoyo: true, repeat: -1, duration: 180 - worker.upgrades.speed * 12 });
+      if (worker.anim === 'walking' || worker.anim === 'carrying') this.tweens.add({ targets: workerIcon, x: wx + 8, yoyo: true, repeat: -1, duration: 360 - worker.upgrades.movement * 28 });
+      this.navLayer.add(workerIcon);
+      this.navLayer.add(this.add.text(wx, wy + 26, worker.name, { fontFamily: 'Inter, Arial', fontSize: '10px', color: '#f8fafc', fontStyle: '900' }).setOrigin(0.5));
+      this.navLayer.add(this.add.text(wx, wy + 40, worker.task, { fontFamily: 'Inter, Arial', fontSize: '9px', color: '#fde68a', fontStyle: '800', align: 'center', wordWrap: { width: 70 } }).setOrigin(0.5));
+      this.navLayer.add(this.add.text(wx, wy + 56, `Spd ${worker.upgrades.speed} Eff ${worker.upgrades.efficiency}`, { fontFamily: 'Inter, Arial', fontSize: '8px', color: '#93c5fd', fontStyle: '800' }).setOrigin(0.5));
+    });
+    const hireX = x + panelW / 2 - 84;
+    this.navLayer.add(this.actionButton(hireX, y + 116, '👷', workers.length < 6 ? `Hire ${money(workerHireCosts[workers.length])}` : 'Crew Max', () => this.hireWorker(), workers.length < 6, 0x22c55e, 132));
+    this.navLayer.add(this.actionButton(hireX - 142, y + 116, '🏗️', this.state.repairSlots < 3 ? `Slot ${this.state.repairSlots + 1}` : 'Slots Max', () => this.expandRepairSlot(), this.state.repairSlots < 3, 0x38bdf8, 118));
+    this.navLayer.add(this.actionButton(hireX - 270, y + 116, '⚡', `Equip ${this.state.equipmentLevel}`, () => this.upgradeEquipment(), this.state.equipmentLevel < 5, 0xfacc15, 112));
+    if (workers[0]) this.navLayer.add(this.actionButton(x - panelW / 2 + 74, y + 116, '⬆️', 'Up Speed', () => this.upgradeWorker(workers[0], 'speed'), workers[0].upgrades.speed < 5, 0xa855f7, 116));
+  }
+
   private progressPill(x: number, y: number, label: string, value: number, icon: string): Phaser.GameObjects.Container {
     const c = this.add.container(x, y + 18).setAlpha(0);
     c.add(this.glassPanel(0, 0, 178, 58, 18, 0x0f172a, 0.72, 0x38bdf8, 0.22));
@@ -904,7 +1082,7 @@ export class GameScene extends Phaser.Scene {
     shown.forEach((tier, index) => {
       const cfg = containerTiers[tier];
       const price = this.containerPrice(tier);
-      this.navLayer.add(this.actionButton(cx + (index - (shown.length - 1) / 2) * spacing, y, tier === 'mythic' ? '💎' : '📦', `${cfg.label} ${money(price)}`, () => this.buyContainer(tier), this.state.money >= price && !this.stageBusy, cfg.color, Math.min(158, spacing - 10)));
+      this.navLayer.add(this.actionButton(cx + (index - (shown.length - 1) / 2) * spacing, y, tier === 'mythic' ? '💎' : '📦', `${cfg.label} ${money(price)}`, () => (this.state.phase === 'waiting' && !this.state.current ? this.buyContainer(tier) : this.queueContainer(tier)), this.state.money >= price && !this.stageBusy, cfg.color, Math.min(158, spacing - 10)));
     });
     if (this.state.level < containerTiers.mythic.unlock && this.rng.next() > 0.985) {
       this.toast('Rumor: a Mythic container was spotted. Build reputation to unlock it.');
@@ -1089,7 +1267,8 @@ export class GameScene extends Phaser.Scene {
     if (!vehicle) return;
     this.stageBusy = true;
     const before = vehicle[step];
-    const stepAmount = this.state.tutorialComplete ? 0.34 + this.state.reputation * 0.02 : (step === 'paint' || step === 'polish' ? 1 : 1);
+    const bestWorkerBoost = this.state.workerRoster.reduce((best, worker) => Math.max(best, worker.upgrades.speed + worker.upgrades.efficiency + (step === 'clean' || step === 'trash' ? worker.upgrades.cleaning : step === 'repair' ? worker.upgrades.repair : step === 'paint' || step === 'polish' ? worker.upgrades.painting : 1)), 3);
+    const stepAmount = this.state.tutorialComplete ? Math.min(1, 0.18 + this.state.reputation * 0.015 + this.state.equipmentLevel * 0.035 + bestWorkerBoost * 0.018) : (step === 'paint' || step === 'polish' ? 1 : 1);
     vehicle[step] = Math.min(1, vehicle[step] + stepAmount);
     const complete = this.state.tutorialComplete
       ? vehicle.trash >= 1 && vehicle.clean >= 1 && vehicle.repair >= 1 && vehicle.paint >= 1 && vehicle.polish >= 1 && vehicle.engineStart >= 1
@@ -1103,7 +1282,7 @@ export class GameScene extends Phaser.Scene {
     this.giveTaskReward(this.stepLabel(step), step === 'repair' ? 85 : 60, step === 'repair' ? 18 : 14, step === 'clean' ? 0x38bdf8 : step === 'trash' ? 0xfacc15 : step === 'paint' ? 0xa855f7 : step === 'polish' ? 0xf8fafc : 0xf97316);
     this.render();
     this.playWorkAnimation(step, vehicle[step] - before);
-    this.time.delayedCall(1100, () => { this.stageBusy = false; });
+    this.time.delayedCall(Math.max(420, 1200 - this.state.equipmentLevel * 80 - bestWorkerBoost * 28), () => { this.stageBusy = false; });
     if (!this.state.tutorialComplete) this.rewardTutorialStep(step);
     if (complete) {
       this.toast(this.state.tutorialComplete ? 'Restoration complete. Customers are making offers!' : 'Great work. Now sell the restored car!');
