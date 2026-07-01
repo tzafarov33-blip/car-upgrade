@@ -36,6 +36,26 @@ interface ImportVehicle {
   scrapValue: number;
   potentialSale: number;
   bestSalePrice?: number;
+  country?: string;
+  year?: number;
+  clueTags?: string[];
+  risk?: number;
+}
+
+interface ContainerOffer {
+  id: string;
+  tier: ContainerTier;
+  country: string;
+  year: number;
+  estimatedCondition: number;
+  vehicleClass: VehicleClass;
+  rarity: Rarity;
+  risk: number;
+  price: number;
+  color: number;
+  clues: string[];
+  botBid: number;
+  history: string[];
 }
 
 interface CollectionRecord {
@@ -63,7 +83,7 @@ interface Mission {
   claimed: boolean;
 }
 
-type WorkerTask = 'Idle' | 'Inspecting' | 'Removing trash' | 'Washing' | 'Repairing' | 'Painting' | 'Polishing' | 'Starting engine' | 'Moving vehicle' | 'Resting';
+type WorkerTask = 'Ожидает' | 'Осмотр' | 'Уборка мусора' | 'Мойка' | 'Ремонт' | 'Покраска' | 'Полировка' | 'Запуск двигателя' | 'Перегон машины' | 'Отдых';
 interface WorkerUpgradeSet { speed: number; cleaning: number; repair: number; painting: number; efficiency: number; movement: number; }
 interface WorkshopWorker { id: string; name: string; task: WorkerTask; vehicleId?: string; upgrades: WorkerUpgradeSet; x: number; y: number; targetX: number; targetY: number; anim: 'walking' | 'working' | 'carrying' | 'resting'; cooldown: number; }
 
@@ -114,6 +134,9 @@ interface ImportState {
   containerQueue: ContainerTier[];
   automationEnabled: boolean;
   equipmentLevel: number;
+  marketOffers: ContainerOffer[];
+  auctionOffer?: ContainerOffer;
+  auctionBid: number;
 }
 
 
@@ -138,7 +161,7 @@ const rarityDeck: Rarity[] = ['common', 'common', 'common', 'uncommon', 'uncommo
 const paintColors = [0xef4444, 0x3b82f6, 0x22c55e, 0xf59e0b, 0xa855f7, 0xf8fafc, 0x0f172a, 0x14b8a6];
 const rarityText: Record<Rarity, string> = { common: '#cbd5e1', uncommon: '#34d399', rare: '#60a5fa', epic: '#c084fc', legendary: '#facc15', mythic: '#ff3df2' };
 const rarityTint: Record<Rarity, number> = { common: 0xcbd5e1, uncommon: 0x34d399, rare: 0x60a5fa, epic: 0xc084fc, legendary: 0xfacc15, mythic: 0xff3df2 };
-const specialContainerNames: Record<SpecialContainer, string> = { golden: 'Golden Container', collector: 'Collector Container', military: 'Mysterious Military Container', classic: 'Forgotten Classic Collection' };
+const specialContainerNames: Record<SpecialContainer, string> = { golden: 'Золотой контейнер', collector: 'Контейнер коллекционера', military: 'Закрытый военный контейнер', classic: 'Забытая классика' };
 
 const locationUnlocks = [
   { level: 1, name: 'Abandoned Junkyard' },
@@ -149,7 +172,7 @@ const locationUnlocks = [
 ];
 const featureUnlocks = [
   { level: 2, name: 'First hired mechanic' },
-  { level: 3, name: 'Better imported vehicles' },
+  { level: 3, name: 'Качественный импорт' },
   { level: 4, name: 'Special auctions' },
   { level: 5, name: 'VIP customers' },
   { level: 6, name: 'Collectors' },
@@ -157,54 +180,59 @@ const featureUnlocks = [
   { level: 10, name: 'Legendary showroom' }
 ];
 const dailyTemplates = [
-  ['daily_open', 'Open 3 containers', 3, 950],
-  ['daily_restore', 'Restore one vehicle', 1, 900],
-  ['daily_sell', 'Sell two vehicles', 2, 1200],
-  ['daily_repair', 'Repair five parts', 5, 1100],
-  ['daily_wash', 'Wash three vehicles', 3, 1000],
+  ['daily_open', 'Открыть 3 контейнера', 3, 950],
+  ['daily_restore', 'Восстановить одну машину', 1, 900],
+  ['daily_sell', 'Продать две машины', 2, 1200],
+  ['daily_repair', 'Отремонтировать пять узлов', 5, 1100],
+  ['daily_wash', 'Помыть три машины', 3, 1000],
   ['daily_upgrade', 'Complete one upgrade', 1, 1400]
 ] as const;
 const weeklyTemplates = [
-  ['weekly_restore', 'Restore 20 vehicles', 20, 18000],
+  ['weekly_restore', 'Восстановить 20 машин', 20, 18000],
   ['weekly_earn', 'Earn $500,000', 500000, 36000],
-  ['weekly_open', 'Open 30 containers', 30, 22000],
+  ['weekly_open', 'Открыть 30 контейнеров', 30, 22000],
   ['weekly_legendary', 'Discover one Legendary', 1, 30000],
   ['weekly_reputation', 'Reach next reputation level', 1, 16000]
 ] as const;
 const achievementTemplates = [
   ['ach_first_flip', 'First Sale', 1, 900],
-  ['ach_perfect', 'First Perfect Restoration', 1, 1800],
+  ['ach_perfect', 'Первая идеальная реставрация', 1, 1800],
   ['ach_rare', 'First Rare Vehicle', 1, 2500],
   ['ach_epic', 'First Epic Vehicle', 1, 5000],
   ['ach_legend', 'First Legendary Vehicle', 1, 12000],
   ['ach_mythic', 'First Mythic Vehicle', 1, 50000],
   ['ach_million', 'One Million Coins', 1000000, 75000],
   ['ach_ten_million', 'Ten Million Coins', 10000000, 300000],
-  ['ach_restore_100', '100 Vehicles Restored', 100, 90000],
-  ['ach_open_1000', '1000 Containers Opened', 1000, 180000],
-  ['ach_all_collection', 'Complete Every Collection', 1, 500000]
+  ['ach_restore_100', '100 восстановленных машин', 100, 90000],
+  ['ach_open_1000', '1000 открытых контейнеров', 1000, 180000],
+  ['ach_all_collection', 'Полная коллекция', 1, 500000]
 ] as const;
-const eventNames = ['Rainy Port Discounts', 'TV Auction Weekend', 'Collector Convention', 'Midnight Container Rumors'];
-const tutorialSteps = ['Inspect damage', 'Remove trash', 'Pressure wash', 'Repair parts', 'Paint & polish', 'Start engine', 'Sell the flip'] as const;
-const restorationStages = ['Inspection', 'Trash', 'Wash', 'Repair', 'Paint', 'Polish', 'Engine'] as const;
-const repairParts = ['Headlights', 'Door', 'Windows', 'Mirror', 'Engine', 'Suspension', 'Wheels', 'Brakes'] as const;
-const paintFinishes = ['Gloss', 'Metallic', 'Matte', 'Pearl'] as const;
+const eventNames = ['Скидки дождливого порта', 'Телевизионный аукцион', 'Слёт коллекционеров', 'Ночные слухи о контейнерах'];
+const tutorialSteps = ['Осмотр', 'Уборка', 'Мойка', 'Ремонт', 'Покраска', 'Запуск', 'Продажа'] as const;
+const restorationStages = ['Осмотр', 'Мусор', 'Мойка', 'Ремонт', 'Краска', 'Блеск', 'Двигатель'] as const;
+const repairParts = ['Фары', 'Дверь', 'Стёкла', 'Зеркало', 'Двигатель', 'Подвеска', 'Колёса', 'Тормоза'] as const;
+const paintFinishes = ['Глянец', 'Металлик', 'Матовый слой', 'Перламутр'] as const;
 const containerTiers: Record<ContainerTier, { label: string; unlock: number; price: number; rate: number; color: number; classes: VehicleClass[]; value: number; costRisk: number }> = {
-  common: { label: 'Common', unlock: 1, price: 420, rate: 0.70, color: 0xcbd5e1, classes: ['compact', 'sedan', 'offroad'], value: 950, costRisk: 0.9 },
-  uncommon: { label: 'Uncommon', unlock: 2, price: 1250, rate: 0.20, color: 0x34d399, classes: ['compact', 'sedan', 'offroad'], value: 2400, costRisk: 1.0 },
-  rare: { label: 'Rare', unlock: 4, price: 4200, rate: 0.07, color: 0x60a5fa, classes: ['sedan', 'offroad', 'sports'], value: 7600, costRisk: 1.12 },
-  epic: { label: 'Epic', unlock: 6, price: 12500, rate: 0.025, color: 0xc084fc, classes: ['sports', 'muscle', 'super'], value: 22000, costRisk: 1.22 },
-  legendary: { label: 'Legendary', unlock: 9, price: 42000, rate: 0.0045, color: 0xfacc15, classes: ['muscle', 'sports', 'super'], value: 84000, costRisk: 1.35 },
-  mythic: { label: 'Mythic', unlock: 12, price: 140000, rate: 0.0005, color: 0xff3df2, classes: ['super'], value: 320000, costRisk: 1.5 }
+  common: { label: 'Обычный', unlock: 1, price: 420, rate: 0.70, color: 0xcbd5e1, classes: ['compact', 'sedan', 'offroad'], value: 950, costRisk: 0.9 },
+  uncommon: { label: 'Необычный', unlock: 2, price: 1250, rate: 0.20, color: 0x34d399, classes: ['compact', 'sedan', 'offroad'], value: 2400, costRisk: 1.0 },
+  rare: { label: 'Редкий', unlock: 4, price: 4200, rate: 0.07, color: 0x60a5fa, classes: ['sedan', 'offroad', 'sports'], value: 7600, costRisk: 1.12 },
+  epic: { label: 'Эпический', unlock: 6, price: 12500, rate: 0.025, color: 0xc084fc, classes: ['sports', 'muscle', 'super'], value: 22000, costRisk: 1.22 },
+  legendary: { label: 'Легендарный', unlock: 9, price: 42000, rate: 0.0045, color: 0xfacc15, classes: ['muscle', 'sports', 'super'], value: 84000, costRisk: 1.35 },
+  mythic: { label: 'Мифический', unlock: 12, price: 140000, rate: 0.0005, color: 0xff3df2, classes: ['super'], value: 320000, costRisk: 1.5 }
 };
-const customerTypes = ['Budget buyer', 'Collector', 'Luxury dealer', 'Museum', 'Export company'] as const;
+const customerTypes = ['Практичный покупатель', 'Коллекционер', 'Премиум-дилер', 'Музей', 'Экспортная компания'] as const;
 const collectionClasses = ['City Cars', 'Sedans', 'SUVs', 'Pickup Trucks', 'Classic Cars', 'Sports Cars', 'Luxury Cars', 'Electric Cars', 'Concept Cars', 'Limited Editions', 'Prototype Vehicles', 'Secret Vehicles'] as const;
-const classDisplay: Record<VehicleClass, string> = { compact: 'City Cars', sedan: 'Sedans', offroad: 'SUVs', muscle: 'Classic Cars', sports: 'Sports Cars', super: 'Luxury Cars' };
-const workshopExpansions = ['Extra Repair Bays', 'Second Garage', 'Paint Department', 'Performance Shop', 'Engine Laboratory', 'Luxury Restoration Building', 'Vehicle Photography Studio', 'Auction Hall'];
+const classDisplay: Record<VehicleClass, string> = { compact: 'Городские авто', sedan: 'Седаны', offroad: 'Внедорожники', muscle: 'Классика', sports: 'Спорткары', super: 'Премиум' };
+const workshopExpansions = ['Дополнительные посты', 'Второй гараж', 'Покрасочный цех', 'Тюнинг-зона', 'Моторная лаборатория', 'Цех премиум-реставрации', 'Фотостудия продаж', 'Аукционный зал'];
 const workerHireCosts = [0, 100000, 350000, 900000, 2000000, 5000000];
-const workerNames = ['Mika', 'Rex', 'Lina', 'Otto', 'Vera', 'Hank'];
+const workerNames = ['Миша', 'Роман', 'Лина', 'Олег', 'Вера', 'Глеб'];
 const slotUnlockCosts = [0, 250000, 1250000];
 const equipmentUpgradeCosts = [0, 25000, 150000, 650000, 1800000];
+const countries = ['Япония', 'Германия', 'США', 'Италия', 'Франция', 'Великобритания', 'Корея', 'Швеция'];
+const countryClasses: Record<string, VehicleClass[]> = { Япония: ['compact', 'sports', 'offroad'], Германия: ['sedan', 'sports', 'super'], США: ['muscle', 'offroad', 'sedan'], Италия: ['sports', 'super'], Франция: ['compact', 'sedan'], Великобритания: ['sedan', 'sports', 'offroad'], Корея: ['compact', 'sedan', 'offroad'], Швеция: ['sedan', 'offroad'] };
+const classRu: Record<VehicleClass, string> = { compact: 'компакт', sedan: 'седан', muscle: 'маслкар', offroad: 'внедорожник', sports: 'спорткар', super: 'суперкар' };
+const rarityRu: Record<Rarity, string> = { common: 'обычная', uncommon: 'необычная', rare: 'редкая', epic: 'эпическая', legendary: 'легендарная', mythic: 'мифическая' };
+const marketClues = ['люкс', 'спорт', 'полиция', 'классика', 'электро', 'повреждён', 'после воды', 'после пожара', 'экспорт', 'неизвестно', 'гаражное хранение', 'редкая серия'];
 
 export class GameScene extends Phaser.Scene {
   private state!: ImportState;
@@ -282,7 +310,7 @@ export class GameScene extends Phaser.Scene {
 
   private newState(): ImportState {
     const now = Date.now();
-    return this.normalizeState({ money: 600, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, storedVehicles: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
+    return this.normalizeState({ money: 1200, level: 1, reputation: 1, xp: 0, containerPrice: 350, containersOpened: 0, storedVehicles: 0, phase: 'waiting', boostUntil: 0, market: 'Rusty Containers', lastSave: now, tutorialComplete: false, tutorialStep: 0 } as ImportState);
   }
 
   private loadState(): ImportState {
@@ -321,6 +349,8 @@ export class GameScene extends Phaser.Scene {
     state.containerQueue ??= [];
     state.automationEnabled ??= true;
     state.equipmentLevel ??= 1;
+    state.marketOffers ??= [];
+    state.auctionBid ??= 0;
     state.yardStage ??= 0;
     state.bestVehicleValue ??= 0;
     state.totalEarned ??= 0;
@@ -344,8 +374,9 @@ export class GameScene extends Phaser.Scene {
     state.equipmentLevel = Math.max(1, Math.min(5, state.equipmentLevel));
     this.rebuildCollectionBook(state);
     state.eventName ??= eventNames[Math.floor(now / 86_400_000) % eventNames.length];
-    state.tutorialComplete ??= state.containersOpened > 0 || state.vehiclesSold > 0;
-    state.tutorialStep ??= state.tutorialComplete ? tutorialSteps.length : 0;
+    state.tutorialComplete = true;
+    state.tutorialStep = tutorialSteps.length;
+    if (state.marketOffers.length !== 5) state.marketOffers = this.generateMarketOffers();
     if (state.current) this.normalizeVehicle(state.current);
     return state;
   }
@@ -538,8 +569,8 @@ export class GameScene extends Phaser.Scene {
   private createWorkerProfile(index: number): WorkshopWorker {
     return {
       id: `worker-${index + 1}`,
-      name: workerNames[index] ?? `Worker ${index + 1}`,
-      task: index === 0 ? 'Idle' : 'Resting',
+      name: workerNames[index] ?? `Мастер ${index + 1}`,
+      task: index === 0 ? 'Ожидает' : 'Отдых',
       upgrades: { speed: 1, cleaning: 1, repair: 1, painting: 1, efficiency: 1, movement: 1 },
       x: 500 + index * 42,
       y: 620,
@@ -561,15 +592,15 @@ export class GameScene extends Phaser.Scene {
     const worker = this.state.workerRoster.find((item) => item.cooldown <= Date.now()) ?? this.state.workerRoster[0];
     if (!worker) return;
     const next = this.nextRestorationStep(vehicle);
-    if (this.state.phase === 'delivered') { worker.task = 'Moving vehicle'; worker.anim = 'carrying'; this.openContainer(); return; }
-    if (this.state.phase === 'revealed' && next === 0) { this.assignWorker(worker, 'Inspecting'); this.inspectVehicle(); return; }
+    if (this.state.phase === 'delivered') { worker.task = 'Перегон машины'; worker.anim = 'carrying'; this.openContainer(); return; }
+    if (this.state.phase === 'revealed' && next === 0) { this.assignWorker(worker, 'Осмотр'); this.inspectVehicle(); return; }
     if (!['inspecting', 'trashing', 'cleaning', 'repairing', 'painting', 'polishing', 'starting'].includes(this.state.phase)) return;
-    if (next === 1) return this.automatedRestore(worker, 'trash', 'Removing trash');
-    if (next === 2) return this.automatedRestore(worker, 'clean', 'Washing');
-    if (next === 3) return this.automatedRestore(worker, 'repair', 'Repairing');
-    if (next === 4) return this.automatedRestore(worker, 'paint', 'Painting');
-    if (next === 5) return this.automatedRestore(worker, 'polish', 'Polishing');
-    if (next === 6 && vehicle.polish >= 1 && vehicle.engineStart < 1) { this.assignWorker(worker, 'Starting engine'); this.startEngine(); }
+    if (next === 1) return this.automatedRestore(worker, 'trash', 'Уборка мусора');
+    if (next === 2) return this.automatedRestore(worker, 'clean', 'Мойка');
+    if (next === 3) return this.automatedRestore(worker, 'repair', 'Ремонт');
+    if (next === 4) return this.automatedRestore(worker, 'paint', 'Покраска');
+    if (next === 5) return this.automatedRestore(worker, 'polish', 'Полировка');
+    if (next === 6 && vehicle.polish >= 1 && vehicle.engineStart < 1) { this.assignWorker(worker, 'Запуск двигателя'); this.startEngine(); }
   }
 
   private automatedRestore(worker: WorkshopWorker, step: 'trash' | 'clean' | 'repair' | 'paint' | 'polish', task: WorkerTask): void {
@@ -578,10 +609,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private assignWorker(worker: WorkshopWorker, task: WorkerTask): void {
-    const skill = task === 'Washing' || task === 'Removing trash' ? worker.upgrades.cleaning : task === 'Repairing' ? worker.upgrades.repair : task === 'Painting' || task === 'Polishing' ? worker.upgrades.painting : worker.upgrades.speed;
+    const skill = task === 'Мойка' || task === 'Уборка мусора' ? worker.upgrades.cleaning : task === 'Ремонт' ? worker.upgrades.repair : task === 'Покраска' || task === 'Полировка' ? worker.upgrades.painting : worker.upgrades.speed;
     worker.task = task;
     worker.vehicleId = this.state.current?.id;
-    worker.anim = task === 'Moving vehicle' ? 'carrying' : 'working';
+    worker.anim = task === 'Перегон машины' ? 'carrying' : 'working';
     worker.cooldown = Date.now() + Math.max(320, 1250 - skill * 140 - worker.upgrades.efficiency * 70 - this.state.equipmentLevel * 60);
     worker.targetX = this.layout.width / 2 + this.rng.int(-120, 120);
     worker.targetY = Math.max(280, this.layout.height * 0.47) + this.rng.int(10, 92);
@@ -641,6 +672,94 @@ export class GameScene extends Phaser.Scene {
     this.state.expansions.push(`Equipment Level ${this.state.equipmentLevel}`);
     this.toast('Garage floor, tools, lights and storage visibly improved.');
     this.render();
+  }
+
+
+  private generateMarketOffers(): ContainerOffer[] {
+    return Array.from({ length: 5 }, () => this.generateMarketOffer());
+  }
+
+  private generateMarketOffer(): ContainerOffer {
+    const roll = this.rng.next();
+    const tier: ContainerTier = roll < 0.001 ? 'mythic' : roll < 0.01 ? 'legendary' : roll < 0.04 ? 'epic' : roll < 0.12 ? 'rare' : roll < 0.30 ? 'uncommon' : 'common';
+    const country = this.rng.pick(countries);
+    const cfg = containerTiers[tier];
+    const vehicleClass = this.rng.pick(countryClasses[country] ?? cfg.classes);
+    const rarity: Rarity = tier === 'mythic' ? 'mythic' : tier === 'legendary' ? 'legendary' : tier === 'epic' ? 'epic' : tier === 'rare' ? 'rare' : tier === 'uncommon' ? 'uncommon' : 'common';
+    const risk = Math.min(0.95, 0.18 + cfg.unlock * 0.055 + this.rng.next() * 0.28);
+    const estimatedCondition = Math.max(0.08, Math.min(0.92, 0.62 - risk * 0.38 + this.rng.next() * 0.28));
+    const year = this.rng.int(1968, 2025);
+    const price = Math.floor(this.containerPrice(tier) * (0.72 + risk * 0.85 + this.rng.next() * 0.28));
+    const clues = [country, classRu[vehicleClass], ...Array.from({ length: 3 }, () => this.rng.pick(marketClues))].filter((v, i, arr) => arr.indexOf(v) === i).slice(0, 5);
+    return { id: this.createId(), tier, country, year, estimatedCondition, vehicleClass, rarity, risk, price, color: cfg.color, clues, botBid: Math.floor(price * (0.35 + this.rng.next() * 0.35)), history: ['Открытие торгов'] };
+  }
+
+  private refreshContainerMarket(): void {
+    const cost = 10000;
+    if (this.state.money < cost) return this.toast(`Обновление рынка стоит ${money(cost)}.`);
+    this.state.money -= cost;
+    this.state.marketOffers = this.generateMarketOffers();
+    this.toast('Новые контейнеры выставлены на торги.');
+    this.render();
+  }
+
+  private startAuction(offer: ContainerOffer): void {
+    if (this.stageBusy || this.state.phase !== 'waiting') return this.toast('Сначала завершите текущую машину.');
+    this.state.auctionOffer = offer;
+    this.state.auctionBid = Math.max(offer.price, offer.botBid + this.rng.int(120, 900));
+    offer.history.unshift(`Бот поднял ставку до ${money(this.state.auctionBid)}`);
+    this.toast(`Живой аукцион: ${offer.country}, ${offer.year}, риск ${Math.floor(offer.risk * 100)}%.`);
+    this.render();
+  }
+
+  private raiseAuctionBid(): void {
+    const offer = this.state.auctionOffer;
+    if (!offer) return;
+    const raise = Math.max(500, Math.floor(offer.price * (0.08 + this.rng.next() * 0.08)));
+    const nextBid = this.state.auctionBid + raise;
+    if (this.state.money < nextBid) return this.toast(`Для ставки нужно ${money(nextBid)}.`);
+    this.state.auctionBid = nextBid;
+    offer.history.unshift(`Вы предложили ${money(nextBid)}`);
+    if (this.rng.next() < 0.45 + offer.risk * 0.35) {
+      this.state.auctionBid += Math.floor(raise * (0.6 + this.rng.next()));
+      offer.history.unshift(`Конкурент ответил: ${money(this.state.auctionBid)}`);
+    } else {
+      this.winAuction();
+      return;
+    }
+    this.render();
+  }
+
+  private stopAuction(): void {
+    this.state.auctionOffer = undefined;
+    this.state.auctionBid = 0;
+    this.toast('Вы вышли из аукциона без покупки.');
+    this.render();
+  }
+
+  private winAuction(): void {
+    const offer = this.state.auctionOffer;
+    if (!offer) return;
+    if (this.state.money < this.state.auctionBid) return this.toast(`Недостаточно монет для ставки ${money(this.state.auctionBid)}.`);
+    this.state.money -= this.state.auctionBid;
+    this.state.marketOffers = this.state.marketOffers.filter((item) => item.id !== offer.id);
+    while (this.state.marketOffers.length < 5) this.state.marketOffers.push(this.generateMarketOffer());
+    this.state.auctionOffer = undefined;
+    this.buyContainerFromOffer(offer, this.state.auctionBid);
+  }
+
+  private buyContainerFromOffer(offer: ContainerOffer, paid: number): void {
+    this.state.currentContainerTier = offer.tier;
+    this.state.current = this.rollVehicle(offer.tier, offer.rarity === 'mythic' ? 1 : 0);
+    Object.assign(this.state.current, { buyPrice: paid, country: offer.country, year: offer.year, clueTags: offer.clues, risk: offer.risk, containerTier: offer.tier });
+    this.state.phase = 'delivering';
+    this.stageBusy = true;
+    this.audio.startAmbience();
+    this.audio.setMusicIntensity(this.state.level + 2);
+    this.audio.play(offer.rarity === 'mythic' ? 'reward' : 'engine');
+    this.clearLayer(this.cinematicLayer);
+    this.render();
+    this.playDeliveryCinematic(() => this.containerDelivered());
   }
 
   private drawWorld(): void {
@@ -704,7 +823,6 @@ export class GameScene extends Phaser.Scene {
     this.drawContextActions();
     this.drawWorkerPanel();
     this.drawBottomNavigation();
-    if (!this.state.tutorialComplete) this.drawTutorialOverlay();
     if (!this.hasRendered) {
       this.animateLayer(this.stageLayer, 10);
       this.animateLayer(this.navLayer, 0);
@@ -738,11 +856,11 @@ export class GameScene extends Phaser.Scene {
     const xpNeeded = this.state.level * 100;
     const xpPercent = Math.max(0, Math.min(1, this.state.xp / xpNeeded));
     const items = [
-      ['💰', 'Money', money(this.state.money), '#facc15'],
-      ['⭐', 'Level', `${this.state.level}  Rep ${this.state.reputation}`, '#93c5fd'],
-      ['🎯', 'Objective', objective, '#e2e8f0'],
-      ['🏭', 'Workshop', this.state.expansions[this.state.expansions.length - 1] ?? this.state.unlockedLocations[this.state.unlockedLocations.length - 1] ?? 'Starter Bay', '#86efac'],
-      ['🔓', 'Next Unlock', featureUnlocks.find((u) => u.level > this.state.level)?.name ?? 'Showroom Prestige', '#fb923c']
+      ['💰', 'Монеты', money(this.state.money), '#facc15'],
+      ['⭐', 'Уровень', `${this.state.level}  Реп. ${this.state.reputation}`, '#93c5fd'],
+      ['🎯', 'Цель', objective, '#e2e8f0'],
+      ['🏭', 'Мастерская', this.state.expansions[this.state.expansions.length - 1] ?? this.state.unlockedLocations[this.state.unlockedLocations.length - 1] ?? 'Стартовый бокс', '#86efac'],
+      ['🔓', 'Далее', featureUnlocks.find((u) => u.level > this.state.level)?.name ?? 'Престиж шоурума', '#fb923c']
     ];
     const gap = w / items.length;
     items.forEach(([icon, label, value, color], index) => {
@@ -764,15 +882,15 @@ export class GameScene extends Phaser.Scene {
     const props = ['scrap_pile', 'dumpster', 'tow_truck', 'forklift', 'yard_light', 'workshop'];
     for (let i = 0; i <= stage; i++) this.stageLayer.add(this.add.image(left - 75 + (i % 3) * 75, y + 10 + Math.floor(i / 3) * 54, props[i]).setScale(i === 5 ? 0.36 : 0.46));
     for (let i = 0; i < this.state.workers; i++) this.stageLayer.add(this.add.image(left - 72 + i * 28, y + 95, 'worker').setScale(0.32));
-    this.stageLayer.add(this.add.text(left, y + 136, `Workers ${this.state.workers} • Collection ${Math.floor(this.collectionCompletion() * 100)}% • Garage ${this.state.storedVehicles}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
+    this.stageLayer.add(this.add.text(left, y + 136, `Мастера ${this.state.workers} • Коллекция ${Math.floor(this.collectionCompletion() * 100)}% • Гараж ${this.state.storedVehicles}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
 
     const right = Math.min(this.layout.width - 120, this.layout.width / 2 + 520);
     this.stageLayer.add(this.glassPanel(right, y + 38, 220, 190, 22, 0x0b1220, 0.56, 0x38bdf8, 0.18));
-    this.stageLayer.add(this.add.text(right, y - 38, `Event: ${this.state.eventName}`, { fontFamily: 'Inter, Arial', fontSize: '15px', color: '#bae6fd', fontStyle: '900', align: 'center', wordWrap: { width: 190 } }).setOrigin(0.5));
+    this.stageLayer.add(this.add.text(right, y - 38, `Событие: ${this.state.eventName}`, { fontFamily: 'Inter, Arial', fontSize: '15px', color: '#bae6fd', fontStyle: '900', align: 'center', wordWrap: { width: 190 } }).setOrigin(0.5));
     const nextDaily = this.state.dailyMissions.find((mission) => !mission.claimed) ?? this.state.dailyMissions[0];
     const nextWeekly = this.state.weeklyMissions.find((mission) => !mission.claimed) ?? this.state.weeklyMissions[0];
-    this.missionLine(right, y + 8, 'Daily', nextDaily);
-    this.missionLine(right, y + 62, 'Weekly', nextWeekly);
+    this.missionLine(right, y + 8, 'День', nextDaily);
+    this.missionLine(right, y + 62, 'Неделя', nextWeekly);
     this.stageLayer.add(this.add.text(right, y + 120, `VIP ${this.state.vipCustomers} • Showroom ${this.state.displayedVehicles.length} • Expansion ${this.state.expansions.length}`, { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#fef3c7', fontStyle: '800', align: 'center', wordWrap: { width: 190 } }).setOrigin(0.5));
   }
 
@@ -792,14 +910,14 @@ export class GameScene extends Phaser.Scene {
       const idleContainer = this.add.image(cx, stageY, 'container_closed').setScale(1.02);
       this.stageLayer.add(idleContainer);
       this.tweens.add({ targets: idleContainer, y: stageY - 5, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-      this.stageCopy('Choose your next container', 'Paid containers only. Compare price, rarity and profit potential before taking the risk.', '#e0f2fe');
+      this.stageCopy('Выберите контейнер', 'Пять предложений с разной ценой, редкостью и риском.', '#e0f2fe');
       return;
     }
     if (this.state.phase === 'delivering' || this.state.phase === 'delivered' || this.state.phase === 'opening') {
       const container = this.add.image(cx, stageY, this.state.phase === 'opening' ? 'container_open' : 'container_closed').setScale(1.05);
       this.stageLayer.add(container);
       if (this.state.phase === 'delivering' || this.state.phase === 'opening') this.tweens.add({ targets: container, x: cx + 8, duration: 90, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
-      this.stageCopy(this.state.phase === 'opening' ? 'Doors unlocking...' : this.state.phase === 'delivered' ? 'Container secured' : 'Forklift unloading...', this.state.phase === 'opening' ? 'Metal groans. Dust leaks from the seal. Watch for the silhouette.' : this.state.phase === 'delivered' ? 'Press OPEN CONTAINER when you are ready for the reveal.' : 'The crew guides the container into the bay.', '#fde68a');
+      this.stageCopy(this.state.phase === 'opening' ? 'Замки открываются...' : this.state.phase === 'delivered' ? 'Контейнер доставлен' : 'Погрузчик разгружает...', this.state.phase === 'opening' ? 'Металл скрипит, из щелей идёт пыль. Скоро увидим находку.' : this.state.phase === 'delivered' ? 'Нажмите «Открыть», чтобы показать машину.' : 'Бригада ставит контейнер на пост.', '#fde68a');
       return;
     }
     const vehicle = this.state.current;
@@ -840,7 +958,7 @@ export class GameScene extends Phaser.Scene {
     const tireScale = 0.75 + vehicle.repair * 0.18;
     this.stageLayer.add(this.add.circle(cx - 92, stageY + 88, 21 * tireScale, 0x020617, 0.86));
     this.stageLayer.add(this.add.circle(cx + 92, stageY + 88, 21 * tireScale, 0x020617, 0.86));
-    if (vehicle.polish >= 1 && vehicle.engineStart >= 1) this.stageLayer.add(this.add.text(cx, stageY - 118, 'SHOWCASE READY', { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#fde68a', fontStyle: '900' }).setOrigin(0.5));
+    if (vehicle.polish >= 1 && vehicle.engineStart >= 1) this.stageLayer.add(this.add.text(cx, stageY - 118, 'ГОТОВО К ПОКАЗУ', { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#fde68a', fontStyle: '900' }).setOrigin(0.5));
   }
 
   private drawRestorationChecklist(cx: number, y: number, vehicle: ImportVehicle): void {
@@ -892,8 +1010,8 @@ export class GameScene extends Phaser.Scene {
       const unlocked = i < this.state.repairSlots;
       const x = cx + (i - 1) * spacing;
       this.stageLayer.add(this.glassPanel(x, y, 160, 72, 18, unlocked ? 0x102033 : 0x020617, unlocked ? 0.5 : 0.28, unlocked ? 0x22c55e : 0x64748b, 0.22));
-      this.stageLayer.add(this.add.text(x, y - 16, `Repair Slot ${i + 1}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: unlocked ? '#bbf7d0' : '#64748b', fontStyle: '900' }).setOrigin(0.5));
-      this.stageLayer.add(this.add.text(x, y + 12, unlocked ? (this.state.current && i === 0 ? 'ACTIVE VEHICLE' : 'Ready for queue') : `Unlock ${money(slotUnlockCosts[i])}`, { fontFamily: 'Inter, Arial', fontSize: '11px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
+      this.stageLayer.add(this.add.text(x, y - 16, `Пост ${i + 1}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: unlocked ? '#bbf7d0' : '#64748b', fontStyle: '900' }).setOrigin(0.5));
+      this.stageLayer.add(this.add.text(x, y + 12, unlocked ? (this.state.current && i === 0 ? 'МАШИНА В РАБОТЕ' : 'Готов к очереди') : `Открыть ${money(slotUnlockCosts[i])}`, { fontFamily: 'Inter, Arial', fontSize: '11px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
     }
   }
 
@@ -903,7 +1021,7 @@ export class GameScene extends Phaser.Scene {
     const x = this.layout.width - panelW / 2 - 22;
     const y = 146;
     this.navLayer.add(this.glassPanel(x, y + 54, panelW, 126, 20, 0x07111f, 0.84, 0x22c55e, 0.24));
-    this.navLayer.add(this.add.text(x - panelW / 2 + 18, y + 4, `WORKER PANEL  ${workers.length}/6  •  Slots ${this.state.repairSlots}/3  •  Queue ${this.state.containerQueue.length}/${this.state.containerSlots}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#bbf7d0', fontStyle: '900' }));
+    this.navLayer.add(this.add.text(x - panelW / 2 + 18, y + 4, `МАСТЕРА  ${workers.length}/6  •  Посты ${this.state.repairSlots}/3  •  Очередь ${this.state.containerQueue.length}/${this.state.containerSlots}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#bbf7d0', fontStyle: '900' }));
     workers.slice(0, 6).forEach((worker, index) => {
       const wx = x - panelW / 2 + 56 + index * Math.min(76, (panelW - 110) / 6);
       const wy = y + 50;
@@ -916,10 +1034,10 @@ export class GameScene extends Phaser.Scene {
       this.navLayer.add(this.add.text(wx, wy + 56, `Spd ${worker.upgrades.speed} Eff ${worker.upgrades.efficiency}`, { fontFamily: 'Inter, Arial', fontSize: '8px', color: '#93c5fd', fontStyle: '800' }).setOrigin(0.5));
     });
     const hireX = x + panelW / 2 - 84;
-    this.navLayer.add(this.actionButton(hireX, y + 116, '👷', workers.length < 6 ? `Hire ${money(workerHireCosts[workers.length])}` : 'Crew Max', () => this.hireWorker(), workers.length < 6, 0x22c55e, 132));
-    this.navLayer.add(this.actionButton(hireX - 142, y + 116, '🏗️', this.state.repairSlots < 3 ? `Slot ${this.state.repairSlots + 1}` : 'Slots Max', () => this.expandRepairSlot(), this.state.repairSlots < 3, 0x38bdf8, 118));
-    this.navLayer.add(this.actionButton(hireX - 270, y + 116, '⚡', `Equip ${this.state.equipmentLevel}`, () => this.upgradeEquipment(), this.state.equipmentLevel < 5, 0xfacc15, 112));
-    if (workers[0]) this.navLayer.add(this.actionButton(x - panelW / 2 + 74, y + 116, '⬆️', 'Up Speed', () => this.upgradeWorker(workers[0], 'speed'), workers[0].upgrades.speed < 5, 0xa855f7, 116));
+    this.navLayer.add(this.actionButton(hireX, y + 116, '👷', workers.length < 6 ? `Нанять ${money(workerHireCosts[workers.length])}` : 'Бригада полная', () => this.hireWorker(), workers.length < 6, 0x22c55e, 132));
+    this.navLayer.add(this.actionButton(hireX - 142, y + 116, '🏗️', this.state.repairSlots < 3 ? `Пост ${this.state.repairSlots + 1}` : 'Посты открыты', () => this.expandRepairSlot(), this.state.repairSlots < 3, 0x38bdf8, 118));
+    this.navLayer.add(this.actionButton(hireX - 270, y + 116, '⚡', `Оборуд. ${this.state.equipmentLevel}`, () => this.upgradeEquipment(), this.state.equipmentLevel < 5, 0xfacc15, 112));
+    if (workers[0]) this.navLayer.add(this.actionButton(x - panelW / 2 + 74, y + 116, '⬆️', 'Скорость', () => this.upgradeWorker(workers[0], 'speed'), workers[0].upgrades.speed < 5, 0xa855f7, 116));
   }
 
   private progressPill(x: number, y: number, label: string, value: number, icon: string): Phaser.GameObjects.Container {
@@ -937,9 +1055,9 @@ export class GameScene extends Phaser.Scene {
   private drawContextActions(): void {
     const y = this.layout.height - 154;
     if (this.state.phase === 'delivered') {
-      this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🔓', 'Open Container', () => this.openContainer(), !this.stageBusy, 0xfacc15, Math.min(220, this.layout.width - 48)));
+      this.navLayer.add(this.actionButton(this.layout.width / 2, y, '🔓', 'Открыть', () => this.openContainer(), !this.stageBusy, 0xfacc15, Math.min(220, this.layout.width - 48)));
     }
-    if (this.state.phase === 'waiting' && this.state.tutorialComplete) this.drawContainerTierActions(y);
+    if (this.state.phase === 'waiting' && this.state.tutorialComplete) this.drawContainerMarket();
     if (this.state.current && !this.state.tutorialComplete && ['revealed', 'inspecting', 'trashing', 'cleaning', 'repairing', 'painting', 'polishing', 'starting'].includes(this.state.phase)) {
       const actions = [
         () => this.inspectVehicle(),
@@ -952,7 +1070,7 @@ export class GameScene extends Phaser.Scene {
       ];
       const icons = ['🔎', '🧹', '💦', '🔧', '🎨', '✨', '🔑'];
       const colors = [0x60a5fa, 0xfacc15, 0x38bdf8, 0xf97316, 0xa855f7, 0xf8fafc, 0x22c55e];
-      const labels = ['Inspect', 'Trash', 'Wash', 'Repair', 'Paint', 'Polish', 'Start'];
+      const labels = ['Осмотр', 'Мусор', 'Мойка', 'Ремонт', 'Краска', 'Блеск', 'Запуск'];
       const step = Math.min(this.state.tutorialStep, 6);
       this.navLayer.add(this.actionButton(this.layout.width / 2, y, icons[step], labels[step], actions[step], !this.stageBusy, colors[step], Math.min(176, this.layout.width - 48)));
     }
@@ -985,11 +1103,11 @@ export class GameScene extends Phaser.Scene {
     const spacing = Math.min(150, Math.max(104, this.layout.width / 5.8));
     const width = Math.min(134, Math.max(92, spacing - 12));
     const actions = [
-      ['🔧', 'Restore', 0x22c55e, () => this.startRestoration()],
+      ['🔧', 'Реставр.', 0x22c55e, () => this.startRestoration()],
       ['💵', money(vehicle.instantSaleOffer), 0xfacc15, () => this.sellVehicleNow()],
       ['♻️', money(vehicle.scrapValue), 0xef4444, () => this.scrapVehicle()],
-      ['🏠', 'Garage', 0x60a5fa, () => this.storeVehicle()],
-      ['⭐', 'Keep', rarityTint[vehicle.rarity], () => this.keepForCollection()]
+      ['🏠', 'Гараж', 0x60a5fa, () => this.storeVehicle()],
+      ['⭐', 'Оставить', rarityTint[vehicle.rarity], () => this.keepForCollection()]
     ] as const;
     actions.forEach(([icon, title, tint, action], index) => {
       this.navLayer.add(this.actionButton(cx + (index - 2) * spacing, y, icon, title, action, !this.stageBusy, tint, width));
@@ -1056,12 +1174,12 @@ export class GameScene extends Phaser.Scene {
 
   private drawBottomNavigation(): void {
     const actions: NavAction[] = [
-      { icon: '🚚', title: this.state.tutorialComplete ? 'Market' : 'Locked', tint: 0xf97316, action: () => this.toast('Choose a paid container tier above. Higher tiers raise risk and profit.'), enabled: () => this.state.tutorialComplete && this.state.phase === 'waiting' },
-      { icon: '🎬', title: 'Ads', tint: 0x38bdf8, action: () => this.showAdRewards(), enabled: () => true },
-      { icon: '💰', title: 'Sell', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => this.state.phase === 'ready' },
-      { icon: '🔧', title: 'Upgrade', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
-      { icon: '📖', title: 'Book', tint: 0x93c5fd, action: () => this.showCollectionBook(), enabled: () => true },
-      { icon: '⚙', title: 'Save', tint: 0xa3a3a3, action: () => this.saveState(), enabled: () => true }
+      { icon: '🚚', title: this.state.tutorialComplete ? 'Рынок' : 'Закрыто', tint: 0xf97316, action: () => this.toast('Choose a paid container tier above. Higher tiers raise risk and profit.'), enabled: () => this.state.tutorialComplete && this.state.phase === 'waiting' },
+      { icon: '🎬', title: 'Бонусы', tint: 0x38bdf8, action: () => this.showAdRewards(), enabled: () => true },
+      { icon: '💰', title: 'Продать', tint: 0xfacc15, action: () => this.sellVehicle(), enabled: () => this.state.phase === 'ready' },
+      { icon: '🔧', title: 'Улучшить', tint: 0x22c55e, action: () => this.shop(), enabled: () => true },
+      { icon: '📖', title: 'Альбом', tint: 0x93c5fd, action: () => this.showCollectionBook(), enabled: () => true },
+      { icon: '⚙', title: 'Сохранить', tint: 0xa3a3a3, action: () => this.saveState(), enabled: () => true }
     ];
     const barW = Math.max(340, Math.min(980, this.layout.width - 36));
     const y = this.layout.height - 76;
@@ -1073,6 +1191,41 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+
+
+  private drawContainerMarket(): void {
+    const w = Math.min(1080, this.layout.width - 40);
+    const cardW = Math.max(150, Math.min(204, (w - 64) / 5));
+    const y = this.layout.height - 252;
+    const x0 = this.layout.width / 2 - w / 2 + cardW / 2;
+    this.navLayer.add(this.glassPanel(this.layout.width / 2, y - 26, w, 178, 24, 0x07111f, 0.9, 0xfacc15, 0.2));
+    this.navLayer.add(this.add.text(this.layout.width / 2 - w / 2 + 20, y - 100, 'РЫНОК КОНТЕЙНЕРОВ', { fontFamily: 'Inter, Arial', fontSize: '16px', color: '#fde68a', fontStyle: '900' }));
+    this.navLayer.add(this.actionButton(this.layout.width / 2 + w / 2 - 98, y - 96, '🔄', `Обновить ${money(10000)}`, () => this.refreshContainerMarket(), this.state.money >= 10000, 0x38bdf8, 176));
+    this.state.marketOffers.forEach((offer, index) => {
+      const x = x0 + index * (cardW + 12);
+      this.navLayer.add(this.glassPanel(x, y - 18, cardW, 132, 18, 0x111827, 0.86, offer.color, 0.42));
+      this.navLayer.add(this.add.text(x, y - 58, `${offer.country} • ${offer.year}`, { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#f8fafc', fontStyle: '900' }).setOrigin(0.5));
+      this.navLayer.add(this.add.text(x, y - 34, `${classRu[offer.vehicleClass]} • ${rarityRu[offer.rarity]}`, { fontFamily: 'Inter, Arial', fontSize: '10px', color: rarityText[offer.rarity], fontStyle: '800' }).setOrigin(0.5));
+      this.navLayer.add(this.add.text(x, y - 12, `сост. ${Math.floor(offer.estimatedCondition * 100)}%  риск ${Math.floor(offer.risk * 100)}%`, { fontFamily: 'Inter, Arial', fontSize: '10px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
+      this.navLayer.add(this.add.text(x, y + 10, offer.clues.slice(0, 3).join(' • '), { fontFamily: 'Inter, Arial', fontSize: '9px', color: '#93c5fd', fontStyle: '800', align: 'center', wordWrap: { width: cardW - 22 } }).setOrigin(0.5));
+      this.navLayer.add(this.actionButton(x, y + 44, '⚡', money(offer.price), () => this.startAuction(offer), this.state.money >= offer.price && !this.stageBusy, offer.color, cardW - 28));
+    });
+    if (this.state.auctionOffer) this.drawAuctionPanel();
+  }
+
+  private drawAuctionPanel(): void {
+    const offer = this.state.auctionOffer;
+    if (!offer) return;
+    const x = this.layout.width / 2;
+    const y = Math.max(170, this.layout.height * 0.43);
+    this.navLayer.add(this.glassPanel(x, y, 520, 238, 26, 0x020617, 0.94, offer.color, 0.65));
+    this.navLayer.add(this.add.text(x, y - 92, 'ЖИВОЙ АУКЦИОН', { fontFamily: 'Inter, Arial', fontSize: '22px', color: '#fde68a', fontStyle: '900' }).setOrigin(0.5));
+    this.navLayer.add(this.add.text(x, y - 58, `${offer.country} • ${offer.year} • ${classRu[offer.vehicleClass]} • ${rarityRu[offer.rarity]}`, { fontFamily: 'Inter, Arial', fontSize: '14px', color: '#f8fafc', fontStyle: '800' }).setOrigin(0.5));
+    this.navLayer.add(this.add.text(x, y - 24, `Оценка: ${Math.floor(offer.estimatedCondition * 100)}%  Риск: ${Math.floor(offer.risk * 100)}%  Ставка: ${money(this.state.auctionBid)}`, { fontFamily: 'Inter, Arial', fontSize: '13px', color: '#cbd5e1', fontStyle: '800' }).setOrigin(0.5));
+    this.navLayer.add(this.add.text(x, y + 10, offer.history.slice(0, 3).join('\n'), { fontFamily: 'Inter, Arial', fontSize: '11px', color: '#93c5fd', fontStyle: '800', align: 'center' }).setOrigin(0.5));
+    this.navLayer.add(this.actionButton(x - 110, y + 78, '⬆️', 'Повысить', () => this.raiseAuctionBid(), this.state.money >= this.state.auctionBid, 0x22c55e, 150));
+    this.navLayer.add(this.actionButton(x + 110, y + 78, '🛑', 'Стоп', () => this.stopAuction(), true, 0xef4444, 150));
+  }
 
   private drawContainerTierActions(y: number): void {
     const tiers = (Object.keys(containerTiers) as ContainerTier[]).filter((tier) => this.state.level >= containerTiers[tier].unlock);
@@ -1151,14 +1304,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private currentObjective(): string {
-    if (this.state.phase === 'delivered') return 'Open container';
+    if (this.state.phase === 'delivered') return 'Открыть контейнер';
     if (!this.state.tutorialComplete) return tutorialSteps[Math.min(this.state.tutorialStep, tutorialSteps.length - 1)];
     const mission = this.state.dailyMissions?.find((item) => !item.claimed);
     if (mission) return mission.title;
-    if (this.state.phase === 'waiting') return 'Buy next container';
-    if (this.state.phase === 'ready') return 'Sell restored vehicle';
-    if (this.state.current) return 'Restore import';
-    return 'Grow the yard';
+    if (this.state.phase === 'waiting') return 'Купить контейнер';
+    if (this.state.phase === 'ready') return 'Продать машину';
+    if (this.state.current) return 'Восстановить машину';
+    return 'Развивать мастерскую';
   }
 
   private buyContainer(tier: ContainerTier = 'common', sponsored = false): void {
